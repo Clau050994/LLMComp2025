@@ -59,14 +59,7 @@ def main():
     eval_parser.add_argument('--quantize', action='store_true',
                             help='Use quantized model')
     
-    # Deploy command
-    deploy_parser = subparsers.add_parser('deploy', help='Deploy a model to an edge device')
-    deploy_parser.add_argument('--model', type=str, required=True, choices=AVAILABLE_MODELS,
-                              help='Model to deploy')
-    deploy_parser.add_argument('--device', type=str, required=True, choices=EDGE_DEVICES,
-                              help='Target edge device for deployment')
-    deploy_parser.add_argument('--quantize', action='store_true',
-                              help='Deploy quantized model')
+    # Deploy command removed as requested
     
     # Benchmark command
     benchmark_parser = subparsers.add_parser('benchmark', help='Benchmark a model')

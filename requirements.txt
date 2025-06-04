@@ -23,4 +23,5 @@ bitsandbytes>=0.41.0; platform_system != "Windows"
 safetensors>=0.3.0
 sentencepiece>=0.1.99
 protobuf>=4.24.0
-tensorrt>=8.6.0; platform_system != "Darwin" and platform_machine != "arm64"
+# TensorRT removed as it's primarily used for edge deployment
+# tensorrt>=8.6.0; platform_system != "Darwin" and platform_machine != "arm64"

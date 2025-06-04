@@ -21,7 +21,7 @@ import platform
 from datetime import datetime
 
 # Import platform utilities for cross-platform compatibility
-from utils.platform_utils import setup_platform_specific_configs, get_platform_name, normalize_path
+from src.utils.platform_utils import setup_platform_specific_configs, get_platform_name, normalize_path
 
 # Add src to path for relative imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -29,7 +29,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.models import get_model
 from src.training import train_model
 from src.evaluation import evaluate_model
-from src.deployment import deploy_model
 from src.utils.logger import setup_logger
 
 # Set up logging
@@ -85,7 +84,7 @@ def parse_arguments():
         '--action',
         type=str,
         required=True,
-        choices=['train', 'evaluate', 'deploy', 'benchmark', 'quantize'],
+        choices=['train', 'evaluate', 'benchmark', 'quantize'],
         help='Action to perform on the model'
     )
     
@@ -180,18 +179,7 @@ def main():
                 quantized=args.quantize
             )
             
-        elif args.action == 'deploy':
-            if not args.device:
-                logger.error("Device must be specified for deployment")
-                sys.exit(1)
-                
-            logger.info(f"Deploying model {args.model} to {args.device}")
-            deploy_model(
-                model_name=args.model,
-                model_config=model_config,
-                device=args.device,
-                quantized=args.quantize
-            )
+        # Deploy action removed as requested
             
         elif args.action == 'quantize':
             logger.info(f"Quantizing model {args.model}")

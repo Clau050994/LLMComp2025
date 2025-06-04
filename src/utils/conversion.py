@@ -1,6 +1,11 @@
 """
-Conversion utilities for SLMs to different formats.
-Primarily supports conversion to ONNX format for deployment to edge devices.
+Conversion utilitie    Convert a model to ONNX format for better interoperability.
+    
+    Args:
+        model_name (str): Name of the model to convert
+        model_config (Dict[str, Any]): Model configuration
+        input_sample (Optional[Tuple[torch.Tensor, ...]]): Sample input tensor for tracingSLMs to different formats.
+Primarily supports conversion to ONNX format for better optimization and compatibility.
 """
 
 import os
