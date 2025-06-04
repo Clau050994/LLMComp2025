@@ -123,8 +123,8 @@ def _load_model(
         Dict[str, Any]: Dictionary with loaded model and tokenizer
     """
     try:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        
+        from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification
+
         logger.info(f"Loading model {model_name} (quantized={quantized})")
         
         # If model path is not specified, use the HF model ID
@@ -135,11 +135,20 @@ def _load_model(
             
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         
+        # Determine model type based on model name to use the appropriate model class
+        model_type = model_config.get("model_type", "causal_lm")
+        
+        # BERT-based models should use AutoModel, while LLM/generative models use AutoModelForCausalLM
+        if model_name in ["distilbert", "albert", "mobilebert"]:
+            model_class = AutoModel
+        else:
+            model_class = AutoModelForCausalLM
+        
         if quantized:
             # Load quantized model if available
             if not model_config["quantization_supported"]:
                 logger.warning(f"Model {model_name} does not support quantization. Loading regular model.")
-                model = AutoModelForCausalLM.from_pretrained(model_id)
+                model = model_class.from_pretrained(model_id)
             else:
                 try:
                     # Attempt to load a quantized version or quantize on-the-fly
@@ -151,17 +160,17 @@ def _load_model(
                         bnb_4bit_compute_dtype=torch.float16
                     )
                     
-                    model = AutoModelForCausalLM.from_pretrained(
+                    model = model_class.from_pretrained(
                         model_id,
                         quantization_config=quantization_config,
                         device_map="auto"
                     )
                 except Exception as e:
                     logger.warning(f"Error loading quantized model: {str(e)}. Falling back to regular model.")
-                    model = AutoModelForCausalLM.from_pretrained(model_id)
+                    model = model_class.from_pretrained(model_id)
         else:
             # Load regular model
-            model = AutoModelForCausalLM.from_pretrained(model_id)
+            model = model_class.from_pretrained(model_id)
             
         return {"model": model, "tokenizer": tokenizer}
         
@@ -221,13 +230,22 @@ def _evaluate_latency(model, tokenizer, model_config, device_constraints):
     inference_speedup = device_constraints.get("inference_speedup", 1.0)
     
     # Prepare input
-    inputs = tokenizer("Translate the following text to Spanish: 'Hello, how are you?'", 
-                      return_tensors="pt")
+    input_text = "This is a sample text to evaluate model latency."
+    inputs = tokenizer(input_text, return_tensors="pt")
     
     # Measure latency
     start_time = time.time()
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_length=50)
+        # Check if model supports generation (LLMs) or just encoding (BERT-like models)
+        if hasattr(model, "generate") and not isinstance(model.__class__.__name__, str) and not model.__class__.__name__.endswith(("Model", "Encoder")):
+            try:
+                outputs = model.generate(**inputs, max_length=50)
+            except Exception as e:
+                # Fallback for models that don't support generation properly
+                outputs = model(**inputs)
+        else:
+            # For encoder models like BERT, DistilBERT, etc.
+            outputs = model(**inputs)
     actual_time = time.time() - start_time
     
     # Apply device speedup factor
@@ -274,7 +292,12 @@ def _evaluate_memory_usage(model, tokenizer, model_config, device_constraints):
                       return_tensors="pt")
     
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_length=50)
+        # Check if model supports generation (LLMs) or just encoding (BERT-like models)
+        if hasattr(model, "generate"):
+            outputs = model.generate(**inputs, max_length=50)
+        else:
+            # For encoder models like BERT, DistilBERT, etc.
+            outputs = model(**inputs)
     
     memory_after = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
     memory_used = memory_after - memory_before
@@ -310,7 +333,16 @@ def _evaluate_inference_time(model, tokenizer, model_config, device_constraints)
         # Measure inference time
         start_time = time.time()
         with torch.no_grad():
-            outputs = model.generate(**inputs, max_length=50)
+            # Check if model supports generation (LLMs) or just encoding (BERT-like models)
+            if hasattr(model, "generate") and not isinstance(model.__class__.__name__, str) and not model.__class__.__name__.endswith(("Model", "Encoder")):
+                try:
+                    outputs = model.generate(**inputs, max_length=50)
+                except Exception as e:
+                    # Fallback for models that don't support generation properly
+                    outputs = model(**inputs)
+            else:
+                # For encoder models like BERT, DistilBERT, etc.
+                outputs = model(**inputs)
         actual_time = time.time() - start_time
         
         # Apply device speedup factor
@@ -368,17 +400,37 @@ def _evaluate_robustness(model, tokenizer, model_config):
     
     results = {}
     
+    # Check if model supports generation
+    supports_generation = hasattr(model, "generate")
+    
     # Compare outputs for clean and noisy inputs
     for i, (clean, noisy) in enumerate(zip(clean_inputs, noisy_inputs)):
         clean_input = tokenizer(clean, return_tensors="pt")
         noisy_input = tokenizer(noisy, return_tensors="pt")
         
         with torch.no_grad():
-            clean_output = model.generate(**clean_input, max_length=50)
-            noisy_output = model.generate(**noisy_input, max_length=50)
-            
-        clean_text = tokenizer.decode(clean_output[0], skip_special_tokens=True)
-        noisy_text = tokenizer.decode(noisy_output[0], skip_special_tokens=True)
+            if supports_generation:
+                clean_output = model.generate(**clean_input, max_length=50)
+                noisy_output = model.generate(**noisy_input, max_length=50)
+                clean_text = tokenizer.decode(clean_output[0], skip_special_tokens=True)
+                noisy_text = tokenizer.decode(noisy_output[0], skip_special_tokens=True)
+            else:
+                # For encoder models, compare embeddings
+                clean_embedding = model(**clean_input).last_hidden_state.mean(dim=1)
+                noisy_embedding = model(**noisy_input).last_hidden_state.mean(dim=1)
+                
+                # Convert embeddings to normalized vectors for cosine similarity
+                clean_norm = torch.nn.functional.normalize(clean_embedding, p=2, dim=1)
+                noisy_norm = torch.nn.functional.normalize(noisy_embedding, p=2, dim=1)
+                
+                # Calculate cosine similarity between embeddings
+                similarity = torch.sum(clean_norm * noisy_norm).item()
+                results[f"test_{i+1}"] = {
+                    "clean_input": clean,
+                    "noisy_input": noisy,
+                    "similarity_score": similarity
+                }
+                continue
         
         # Simple similarity score (length ratio)
         similarity = min(len(clean_text), len(noisy_text)) / max(len(clean_text), len(noisy_text))

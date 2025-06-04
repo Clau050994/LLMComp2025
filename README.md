@@ -1,7 +1,7 @@
 # slm-sagemaker-eval
 ## Small Language Model (SLM) Evaluation on AWS SageMaker
 
-This project evaluates the performance of 5–7 Small Language Models (SLMs) using AWS SageMaker. The goal is to benchmark these models for deployment on edge devices such as Raspberry Pi or Jetson Nano.
+This project evaluates the performance of 5–7 Small Language Models (SLMs) using AWS SageMaker. The goal is to benchmark these models for efficient use in various applications.
 
 ## 🚀 Getting Started
 
@@ -69,16 +69,16 @@ This project evaluates the performance of 5–7 Small Language Models (SLMs) usi
    python run.py evaluate --model distilbert --device docker-sim
    ```
 
-4. **Quantize model for edge deployment**
+4. **Quantize model for better efficiency**
 
    ```bash
    python run.py quantize --model distilbert
    ```
 
-5. **Deploy to edge device**
+5. **Quick test a model**
 
    ```bash
-   python run.py deploy --model distilbert --device raspberry-pi --quantize
+   python quick_test.py --model distilbert --input "This is a test sentence."
    ```
 
 For more detailed usage, refer to the [Documentation.md](Documentation.md) file.
@@ -87,8 +87,8 @@ For more detailed usage, refer to the [Documentation.md](Documentation.md) file.
 
 - Train multiple open-source SLMs on SageMaker
 - Benchmark latency, memory usage, accuracy, and model size
-- Evaluate edge-deployability via quantization and ONNX export
-- Prepare deployment pipelines for resource-constrained environments
+- Evaluate models via quantization and efficient testing
+- Provide easy tools for quick model testing and comparison
 
 📊 Evaluation Metrics
   - Latency

@@ -4,30 +4,30 @@ This documentation provides an overview of the SLM-SageMaker-Eval project, which
 
 ## Project Overview
 
-The SLM-SageMaker-Eval framework allows you to train, evaluate, and deploy Small Language Models on edge devices like Raspberry Pi and NVIDIA Jetson Nano. The framework provides tools for:
+The SLM-SageMaker-Eval framework allows you to train, evaluate, and test Small Language Models. The framework provides tools for:
 
 - Training SLMs on AWS SageMaker
 - Evaluating model performance on various metrics
-- Optimizing models through quantization and format conversion
-- Deploying models to resource-constrained edge devices
-- Benchmarking models for specific use cases (e.g., border control)
+- Optimizing models through quantization
+- Benchmarking models for specific use cases
+- Testing models with custom inputs
 
 ## Project Structure
 
 ```
 slm-sagemaker-eval/
 ├── run.py                 # Simple command-line interface to run the framework
+├── quick_test.py          # Script for quickly testing models with custom inputs
 ├── requirements.txt       # Python package dependencies
 ├── src/                   # Main source code directory
 │   ├── main.py            # Core entry point for the application
 │   ├── models/            # Model definitions and registry
 │   ├── training/          # Code for training models
 │   ├── evaluation/        # Code for evaluating models
-│   ├── deployment/        # Code for deploying models to edge devices
 │   └── utils/             # Utility functions
-├── data/                  # Directory for datasets
-├── notebooks/             # Jupyter notebooks for analysis
 ├── config/                # Configuration files
+├── logs/                  # Logs from running the framework
+├── results/               # Results from model evaluations
 └── LICENSE                # License information
 ```
 
@@ -98,16 +98,13 @@ slm-sagemaker-eval/
   - Mobile report generation
 - Generates comprehensive performance reports with overall scores
 
-### Deployment System
+### Quick Testing System
 
-#### `src/deployment/__init__.py`
-- Tools to deploy models to edge devices:
-  - Raspberry Pi (via AWS Greengrass)
-  - Jetson Nano (via ONNX and TensorRT)
-  - Docker (for simulating edge environments)
-- Generates deployment packages and instructions
-- Creates necessary configuration files for each platform
-- Prepares models for edge constraints
+#### `quick_test.py`
+- Enables quick testing of models with custom inputs
+- Supports both encoder-only models and generative models
+- Provides human-readable output for model responses
+- Helps debug and verify model behavior before full evaluation
 
 ### Utilities
 
@@ -206,13 +203,25 @@ python run.py train --model phi-3-mini --dataset squad
 
 ### 2. Evaluate model performance
 
-Evaluate the model's performance for edge deployment:
+Evaluate the model's performance:
 
 ```bash
-python run.py evaluate --model phi-3-mini --device raspberry-pi --metrics accuracy latency model_size
+python run.py evaluate --model phi-3-mini --device docker-sim --metrics accuracy latency model_size
 ```
 
-### 3. Optimize the model
+### 3. Quick test a model
+
+Run a quick test on a model with custom input:
+
+```bash
+# For generative models
+python quick_test.py --model tinyllama-1.1b --input "Write a short story about AI"
+
+# For encoder models
+python quick_test.py --model distilbert --input "Analyze this sentence's sentiment"
+```
+
+### 4. Optimize the model
 
 Quantize the model to make it smaller:
 
@@ -220,20 +229,12 @@ Quantize the model to make it smaller:
 python run.py quantize --model phi-3-mini --bits 4
 ```
 
-### 4. Deploy to edge device
-
-Deploy the model to an edge device:
-
-```bash
-python run.py deploy --model phi-3-mini --device raspberry-pi --quantize
-```
-
 ### 5. Run benchmarks
 
 Benchmark the model on specific use cases:
 
 ```bash
-python run.py benchmark --model phi-3-mini --device raspberry-pi
+python run.py benchmark --model phi-3-mini --device docker-sim
 ```
 
 ## Model Evaluation Parameters
@@ -323,7 +324,7 @@ The framework is designed to be cross-platform but requires some additional setu
 Future plans for the framework include:
 
 - Support for additional SLMs as they become available
-- Integration with additional edge devices and platforms
-- Enhanced deployment strategies for specific use cases
+- Integration with more datasets and evaluation metrics
+- Enhanced testing capabilities for specific use cases
 - Automated comparative reports across multiple models
-- Improved optimization techniques for edge deployment
+- Improved model optimization techniques for better efficiency

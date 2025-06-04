@@ -1,0 +1,21 @@
+{
+  "model_name": "distilbert",
+  "device": "docker-sim",
+  "quantized": false,
+  "metrics": {
+    "accuracy": {
+      "score": 0.85,
+      "metric": "F1"
+    },
+    "latency": {
+      "latency_ms": 1560.7539812723796,
+      "simulated": true,
+      "device_factor": 0.3
+    },
+    "model_size": {
+      "size_mb": 66.0,
+      "quantized": false,
+      "estimated": true
+    }
+  }
+}
