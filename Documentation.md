@@ -6,7 +6,6 @@ This documentation provides an overview of the SLM-SageMaker-Eval project, which
 
 The SLM-SageMaker-Eval framework allows you to train, evaluate, and test Small Language Models. The framework provides tools for:
 
-- Training SLMs on AWS SageMaker
 - Evaluating model performance on various metrics
 - Optimizing models through quantization
 - Benchmarking models for specific use cases
@@ -134,23 +133,6 @@ slm-sagemaker-eval/
 - Contains both full and quantized model variants
 - Includes ONNX-exported models for edge deployment
 
-#### `data/processed/`
-- Contains pre-processed datasets ready for model training and evaluation
-- Includes `border_control/` directory with prepared border control case data
-- Features tokenized and formatted datasets optimized for specific models
-
-#### `data/raw/`
-- Contains original, unprocessed dataset files
-- Includes `border_control/` with raw data for border control scenarios
-- Preserves original data formats for reproducibility
-
-#### `data/results/`
-- Stores evaluation results and benchmark outputs
-- Contains model comparison metrics and charts
-- Preserves test runs with timestamps for tracking improvement
-
-### Notebooks Directory
-
 #### Jupyter notebooks for analysis and experimentation
 - Model comparison and visualization notebooks
 - Performance analysis across different edge devices
@@ -194,9 +176,6 @@ This will detect your platform, check for required dependencies, and provide spe
 Train a model using SageMaker or locally:
 
 ```bash
-# Train on SageMaker
-python run.py train --model phi-3-mini --dataset squad --sagemaker
-
 # Train locally
 python run.py train --model phi-3-mini --dataset squad
 ```
@@ -213,13 +192,6 @@ python run.py evaluate --model phi-3-mini --device docker-sim --metrics accuracy
 
 Run a quick test on a model with custom input:
 
-```bash
-# For generative models
-python quick_test.py --model tinyllama-1.1b --input "Write a short story about AI"
-
-# For encoder models
-python quick_test.py --model distilbert --input "Analyze this sentence's sentiment"
-```
 
 ### 4. Optimize the model
 
@@ -266,7 +238,7 @@ To use the framework, you need:
 1. Python 3.8 or higher
 2. PyTorch
 3. HuggingFace Transformers
-4. AWS account with SageMaker access (for SageMaker features)
+4. AWS S3 buckets
 5. Docker (for simulated deployments)
 6. ONNX Runtime (for model conversion)
 
@@ -319,12 +291,6 @@ The framework is designed to be cross-platform but requires some additional setu
    - Some deployment scripts use bash commands. On Windows, consider using Git Bash, WSL, or adapt the commands to PowerShell/CMD equivalents.
    - The framework uses Python's platform detection to adapt terminal commands where needed.
 
-## Future Development
 
-Future plans for the framework include:
 
-- Support for additional SLMs as they become available
-- Integration with more datasets and evaluation metrics
-- Enhanced testing capabilities for specific use cases
-- Automated comparative reports across multiple models
-- Improved model optimization techniques for better efficiency
+

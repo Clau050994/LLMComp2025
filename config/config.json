@@ -1,216 +1,186 @@
 {
-    "models": {
-        "phi-3-mini": {
-            "description": "Phi-3-mini (3.8B parameters, 128K context)",
-            "training": {
-                "epochs": 3,
-                "batch_size": 8,
-                "learning_rate": 5e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 4
-            }
-        },
-        "tinyllama-1.1b": {
-            "description": "TinyLLaMA-1.1B small but capable model",
-            "training": {
-                "epochs": 3,
-                "batch_size": 16,
-                "learning_rate": 1e-4,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 4
-            }
-        },
-        "distilbert": {
-            "description": "DistilBERT (66M parameters)",
-            "training": {
-                "epochs": 5,
-                "batch_size": 32,
-                "learning_rate": 2e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 8
-            }
-        },
-        "albert": {
-            "description": "ALBERT (12M parameters)",
-            "training": {
-                "epochs": 5,
-                "batch_size": 64,
-                "learning_rate": 3e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 8
-            }
-        },
-        "mobilebert": {
-            "description": "MobileBERT (25M parameters)",
-            "training": {
-                "epochs": 5,
-                "batch_size": 48,
-                "learning_rate": 1e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 8
-            }
-        },
-        "mobilellama": {
-            "description": "MobileLLaMA (1.4B parameters)",
-            "training": {
-                "epochs": 3,
-                "batch_size": 16,
-                "learning_rate": 5e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 4
-            }
-        },
-        "grok-3-mini-fast": {
-            "description": "Grok-3-mini-fast (3B parameters)",
-            "training": {
-                "epochs": 3,
-                "batch_size": 8,
-                "learning_rate": 1e-5,
-                "weight_decay": 0.01
-            },
-            "quantization": {
-                "supported": true,
-                "recommended_bits": 4
-            }
-        }
+  "models": {
+    "phi-3-mini": {
+      "description": "Phi-3-mini (3.8B parameters, 128K context)",
+      "training": {
+        "epochs": 3,
+        "batch_size": 8,
+        "learning_rate": 5e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 4
+      }
     },
-    "devices": {
-        "raspberry-pi": {
-            "description": "Raspberry Pi 4 (4GB RAM)",
-            "constraints": {
-                "memory_limit_mb": 3072,
-                "cpu_cores": 4,
-                "inference_speedup": 0.2,
-                "power_limit_watts": 5
-            }
-        },
-        "jetson-nano": {
-            "description": "NVIDIA Jetson Nano (4GB RAM)",
-            "constraints": {
-                "memory_limit_mb": 3584,
-                "cpu_cores": 4,
-                "gpu_cores": 128,
-                "inference_speedup": 0.5,
-                "power_limit_watts": 10
-            }
-        },
-        "docker-sim": {
-            "description": "Docker-simulated edge environment",
-            "constraints": {
-                "memory_limit_mb": 2048,
-                "cpu_cores": 2,
-                "inference_speedup": 0.3,
-                "power_limit_watts": 3
-            }
-        }
+    "tinyllama-1.1b": {
+      "description": "TinyLLaMA-1.1B small but capable model",
+      "training": {
+        "epochs": 3,
+        "batch_size": 16,
+        "learning_rate": 1e-4,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 4
+      }
     },
-    "tasks": {
-        "document_verification": {
-            "description": "Verify passport/ID information",
-            "metrics": ["accuracy", "latency", "robustness"]
-        },
-        "multilingual_translation": {
-            "description": "Translate instructions to travelers",
-            "languages": ["Spanish", "French", "Arabic", "Russian", "Mandarin", "German"],
-            "metrics": ["accuracy", "latency"]
-        },
-        "entity_detection": {
-            "description": "Detect potential threats or suspicious entities",
-            "metrics": ["accuracy", "latency", "robustness"]
-        },
-        "customs_declaration": {
-            "description": "Help with customs declarations",
-            "metrics": ["accuracy", "helpfulness", "multilingual"]
-        },
-        "report_generation": {
-            "description": "Generate structured reports from unstructured inputs",
-            "metrics": ["accuracy", "completeness", "structure"]
-        }
+    "distilbert": {
+      "description": "DistilBERT (66M parameters)",
+      "training": {
+        "epochs": 5,
+        "batch_size": 32,
+        "learning_rate": 2e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 8
+      }
     },
-    "evaluation": {
-        "metrics": {
-            "accuracy": {
-                "weight": 0.25,
-                "description": "Correctness of model outputs"
-            },
-            "latency": {
-                "weight": 0.2,
-                "description": "Time taken to return a prediction (ms)",
-                "thresholds": {
-                    "excellent": "<100ms",
-                    "good": "<250ms", 
-                    "acceptable": "<500ms",
-                    "poor": ">500ms"
-                }
-            },
-            "model_size": {
-                "weight": 0.15,
-                "description": "Storage size of the model (MB)"
-            },
-            "memory_usage": {
-                "weight": 0.15,
-                "description": "Peak RAM usage during inference (MB)"
-            },
-            "inference_time": {
-                "weight": 0.1,
-                "description": "Time for specific tasks (ms)"
-            },
-            "power_consumption": {
-                "weight": 0.1,
-                "description": "Estimated power usage during inference (watts)"
-            },
-            "robustness": {
-                "weight": 0.05,
-                "description": "Resilience to noise or adversarial inputs"
-            }
-        }
+    "albert": {
+      "description": "ALBERT (12M parameters)",
+      "training": {
+        "epochs": 5,
+        "batch_size": 64,
+        "learning_rate": 3e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 8
+      }
     },
-    "sagemaker": {
-        "default_region": "us-west-2",
-        "default_bucket": "slm-sagemaker-eval",
-        "training": {
-            "phi-3-mini": {
-                "instance_type": "ml.g5.2xlarge"
-            },
-            "tinyllama-1.1b": {
-                "instance_type": "ml.g4dn.xlarge"
-            },
-            "distilbert": {
-                "instance_type": "ml.c5.xlarge"
-            },
-            "albert": {
-                "instance_type": "ml.c5.large"
-            },
-            "mobilebert": {
-                "instance_type": "ml.c5.large"
-            },
-            "mobilellama": {
-                "instance_type": "ml.g4dn.xlarge"
-            },
-            "grok-3-mini-fast": {
-                "instance_type": "ml.g5.xlarge"
-            },
-            "default": {
-                "instance_type": "ml.c5.xlarge"
-            }
-        }
+    "mobilebert": {
+      "description": "MobileBERT (25M parameters)",
+      "training": {
+        "epochs": 5,
+        "batch_size": 48,
+        "learning_rate": 1e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 8
+      }
+    },
+    "mobilellama": {
+      "description": "MobileLLaMA (1.4B parameters)",
+      "training": {
+        "epochs": 3,
+        "batch_size": 16,
+        "learning_rate": 5e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 4
+      }
+    },
+    "grok-3-mini-fast": {
+      "description": "Grok-3-mini-fast (3B parameters)",
+      "training": {
+        "epochs": 3,
+        "batch_size": 8,
+        "learning_rate": 1e-5,
+        "weight_decay": 0.01
+      },
+      "quantization": {
+        "supported": true,
+        "recommended_bits": 4
+      }
     }
+  },
+  "devices": {
+    "raspberry-pi": {
+      "description": "Raspberry Pi 4 (4GB RAM)",
+      "constraints": {
+        "memory_limit_mb": 3072,
+        "cpu_cores": 4,
+        "inference_speedup": 0.2,
+        "power_limit_watts": 5
+      }
+    },
+    "jetson-nano": {
+      "description": "NVIDIA Jetson Nano (4GB RAM)",
+      "constraints": {
+        "memory_limit_mb": 3584,
+        "cpu_cores": 4,
+        "gpu_cores": 128,
+        "inference_speedup": 0.5,
+        "power_limit_watts": 10
+      }
+    },
+    "docker-sim": {
+      "description": "Docker-simulated edge environment",
+      "constraints": {
+        "memory_limit_mb": 2048,
+        "cpu_cores": 2,
+        "inference_speedup": 0.3,
+        "power_limit_watts": 3
+      }
+    }
+  },
+  "tasks": {
+    "document_verification": {
+      "description": "Verify passport/ID information",
+      "metrics": ["accuracy", "latency", "robustness"]
+    },
+    "multilingual_translation": {
+      "description": "Translate instructions to travelers",
+      "languages": ["Spanish", "French", "Arabic", "Russian", "Mandarin", "German"],
+      "metrics": ["accuracy", "latency"]
+    },
+    "entity_detection": {
+      "description": "Detect potential threats or suspicious entities",
+      "metrics": ["accuracy", "latency", "robustness"]
+    },
+    "customs_declaration": {
+      "description": "Help with customs declarations",
+      "metrics": ["accuracy", "helpfulness", "multilingual"]
+    },
+    "report_generation": {
+      "description": "Generate structured reports from unstructured inputs",
+      "metrics": ["accuracy", "completeness", "structure"]
+    }
+  },
+  "evaluation": {
+    "metrics": {
+      "accuracy": {
+        "weight": 0.25,
+        "description": "Correctness of model outputs"
+      },
+      "latency": {
+        "weight": 0.2,
+        "description": "Time taken to return a prediction (ms)",
+        "thresholds": {
+          "excellent": "<100ms",
+          "good": "<250ms",
+          "acceptable": "<500ms",
+          "poor": ">500ms"
+        }
+      },
+      "model_size": {
+        "weight": 0.15,
+        "description": "Storage size of the model (MB)"
+      },
+      "memory_usage": {
+        "weight": 0.15,
+        "description": "Peak RAM usage during inference (MB)"
+      },
+      "inference_time": {
+        "weight": 0.1,
+        "description": "Time for specific tasks (ms)"
+      },
+      "power_consumption": {
+        "weight": 0.1,
+        "description": "Estimated power usage during inference (watts)"
+      },
+      "robustness": {
+        "weight": 0.05,
+        "description": "Resilience to noise or adversarial inputs"
+      }
+    }
+  }
 }

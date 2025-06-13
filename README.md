@@ -1,14 +1,14 @@
 # slm-sagemaker-eval
 ## Small Language Model (SLM) Evaluation on AWS SageMaker
 
-This project evaluates the performance of 5–7 Small Language Models (SLMs) using AWS SageMaker. The goal is to benchmark these models for efficient use in various applications.
+This project evaluates the performance of 5–7 Small Language Models (SLMs). The goal is to benchmark these models for efficient use in various applications.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
 - Python 3.8 or higher
-- AWS account with SageMaker access (for cloud training features)
+- AWS account with S3 buckets
 - Git
 - pip
 
@@ -97,12 +97,6 @@ For more detailed usage, refer to the [Documentation.md](Documentation.md) file.
   - Inference time (ms)
   - Edge deployment feasibility
 
-## 📦 Deployment Targets
-
-  - Raspberry Pi (via AWS Greengrass)
-  - Jetson Nano (via ONNX + TensorRT)
-  - Simulated edge environments (Docker)
-
 ## 🧠 Models Under Evaluation
   - Phi-3-mini (128K context)
   - TinyLLaMA-1.1B
@@ -125,21 +119,7 @@ slm-sagemaker-eval/
 │   └── utils/             # Helper functions
 ├── config/                # Configuration files
 ├── data/                  # Data directory
-└── notebooks/             # Analysis notebooks
 ```
-
-## ⚙️ Platform Compatibility
-
-This framework is designed to work across different operating systems:
-
-- **Linux**: Fully supported and recommended for production use
-- **macOS**: Fully supported for development and testing
-- **Windows**: Supported with some additional setup requirements:
-  - Install Git Bash or WSL (Windows Subsystem for Linux) for better compatibility
-  - For CUDA support, install the appropriate NVIDIA drivers and CUDA toolkit
-  - Some packages may require specific Windows versions
-
-Run `python run.py check` to verify compatibility with your system.
 
 ## 🤝 Contributing
 
