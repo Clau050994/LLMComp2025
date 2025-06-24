@@ -1,5 +1,5 @@
 """
-SageMaker training script for SLMs.
+Training script for SLMs.
 This script is used as the entry point for SageMaker training jobs.
 """
 
@@ -82,10 +82,13 @@ def prepare_dataset(args):
     """
     logger.info(f"Loading dataset: {args.dataset}")
     
+    # Check if data is a local CSV file
+    if args.dataset.lower().endswith(".csv") and os.path.exists(args.dataset):
+        logger.info(f"Loading local CSV file: {args.dataset}")
+        dataset = load_dataset("csv", data_files=args.dataset)
     # Check if data is being provided through SageMaker channels
-    if args.training_dir and os.path.exists(args.training_dir):
+    elif args.training_dir and os.path.exists(args.training_dir):
         logger.info(f"Loading data from SageMaker channel: {args.training_dir}")
-        # This is to handle pre-uploaded datasets in SageMaker
         train_dataset = datasets.load_from_disk(args.training_dir)
         
         if args.validation_dir and os.path.exists(args.validation_dir):
@@ -95,6 +98,7 @@ def prepare_dataset(args):
             train_val = train_dataset.train_test_split(test_size=0.1)
             train_dataset = train_val["train"]
             eval_dataset = train_val["test"]
+        return train_dataset, eval_dataset
     else:
         # Load from HF datasets
         if args.dataset_config:

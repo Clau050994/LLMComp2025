@@ -1,10 +1,10 @@
-# SLM SageMaker Evaluation Framework Documentation
+# SLM Evaluation Framework Documentation
 
 This documentation provides an overview of the SLM-SageMaker-Eval project, which evaluates Small Language Models (SLMs) for deployment on edge devices.
 
 ## Project Overview
 
-The SLM-SageMaker-Eval framework allows you to train, evaluate, and test Small Language Models. The framework provides tools for:
+The SLM Eval framework allows you to train, evaluate, and test Small Language Models. The framework provides tools for:
 
 - Evaluating model performance on various metrics
 - Optimizing models through quantization
@@ -160,14 +160,6 @@ slm-sagemaker-eval/
 ## Using the Framework
 
 The framework is designed to follow this workflow:
-
-### 0. Check system compatibility
-
-Before using the framework, check if your system is compatible:
-
-```bash
-python run.py check
-```
 
 This will detect your platform, check for required dependencies, and provide specific recommendations for your environment.
 

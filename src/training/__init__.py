@@ -1,164 +1,81 @@
 """
-SageMaker training module for the SLM evaluation framework.
-This module provides functions for training models on AWS SageMaker.
+General local training module for the SLM evaluation framework.
+Supports both classification and summarization-style models.
 """
 
 import os
 import logging
+import sys
 from typing import Dict, Any, Optional
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    AutoModelForSequenceClassification,
+    AutoModelForSeq2SeqLM,
+    DataCollatorForSeq2Seq
+)
 
-import boto3
-from sagemaker import get_execution_role
-from sagemaker.huggingface import HuggingFace
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
 logger = logging.getLogger(__name__)
+
 
 def train_model(
     model_name: str,
     model_config: Dict[str, Any],
-    dataset: str,
+    dataset_csv: str,
     batch_size: int = 8,
     epochs: int = 3,
-    use_sagemaker: bool = True,
     output_path: Optional[str] = None
 ) -> str:
-    """
-    Train the model using AWS SageMaker or locally.
-    
-    Args:
-        model_name (str): Name of the model to train
-        model_config (Dict[str, Any]): Model configuration from the registry
-        dataset (str): Dataset to train on
-        batch_size (int): Training batch size
-        epochs (int): Number of training epochs
-        use_sagemaker (bool): Whether to use SageMaker for training
-        output_path (str, optional): Path to save the trained model
-        
-    Returns:
-        str: Path to the trained model
-    """
-    logger.info(f"Starting training for model {model_name}")
-    
-    if not use_sagemaker:
-        return _train_locally(model_name, model_config, dataset, batch_size, epochs, output_path)
-    else:
-        return _train_on_sagemaker(model_name, model_config, dataset, batch_size, epochs)
+    logger.info(f"Starting local training for model {model_name}")
+    return _train_locally(model_name, model_config, dataset_csv, batch_size, epochs, output_path)
 
-def _train_on_sagemaker(
-    model_name: str,
-    model_config: Dict[str, Any],
-    dataset: str,
-    batch_size: int,
-    epochs: int
-) -> str:
-    """
-    Train the model on AWS SageMaker.
-    
-    Args:
-        model_name (str): Name of the model to train
-        model_config (Dict[str, Any]): Model configuration from the registry
-        dataset (str): Dataset to train on
-        batch_size (int): Training batch size
-        epochs (int): Number of training epochs
-        
-    Returns:
-        str: S3 path to the trained model
-    """
-    try:
-        logger.info("Setting up SageMaker training job")
-        
-        role = get_execution_role()
-        
-        # Create a session
-        sagemaker_session = boto3.Session().client('sagemaker')
-        
-        # Define hyperparameters
-        hyperparameters = {
-            'model_id': model_config['hf_model_id'],
-            'dataset': dataset,
-            'epochs': epochs,
-            'per_device_train_batch_size': batch_size,
-            'per_device_eval_batch_size': batch_size
-        }
-        
-        # Create HuggingFace estimator
-        huggingface_estimator = HuggingFace(
-            entry_point='train.py',
-            source_dir='src/training/scripts',
-            role=role,
-            instance_count=1,
-            instance_type=model_config['instance_type'],
-            transformers_version=model_config['sagemaker_framework_version'],
-            pytorch_version='1.13.1',
-            py_version='py39',
-            hyperparameters=hyperparameters,
-            output_path=f's3://slm-sagemaker-eval/models/{model_name}'
-        )
-        
-        # Start training
-        logger.info(f"Starting SageMaker training job for {model_name}")
-        huggingface_estimator.fit()
-        
-        # Get the model path
-        model_path = huggingface_estimator.model_data
-        
-        logger.info(f"Training completed. Model saved to {model_path}")
-        return model_path
-        
-    except Exception as e:
-        logger.error(f"Error in SageMaker training: {str(e)}", exc_info=True)
-        raise
-    
+
 def _train_locally(
     model_name: str,
     model_config: Dict[str, Any],
-    dataset: str,
+    dataset_csv: str,
     batch_size: int,
     epochs: int,
     output_path: Optional[str] = None
 ) -> str:
-    """
-    Train the model locally (for development or testing).
-    
-    Args:
-        model_name (str): Name of the model to train
-        model_config (Dict[str, Any]): Model configuration from the registry
-        dataset (str): Dataset to train on
-        batch_size (int): Training batch size
-        epochs (int): Number of training epochs
-        output_path (str, optional): Path to save the trained model
-        
-    Returns:
-        str: Path to the trained model
-    """
     try:
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments
-        import datasets
-        
-        logger.info(f"Starting local training for model {model_name}")
-        
-        # Set default output path if not provided
+        logger.info(f"Loading dataset from {dataset_csv}")
+        dataset = load_dataset("csv", data_files={"train": dataset_csv, "validation": dataset_csv})
+
+        task_type = model_config.get("task_type", "classification")  # default to classification
+        hf_model_id = model_config["hf_model_id"]
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
+
         if output_path is None:
             output_path = f"models/{model_name}/local/{epochs}epochs"
-            os.makedirs(output_path, exist_ok=True)
-        
-        # Load the dataset
-        logger.info(f"Loading dataset {dataset}")
-        
-        # For demo purposes, we'll use a simple public dataset
-        # In a real scenario, you would load your specific dataset
-        if dataset == "generic":
-            dataset = "glue/sst2"
-        
-        # Load dataset
-        train_dataset = datasets.load_dataset(dataset, split="train")
-        eval_dataset = datasets.load_dataset(dataset, split="validation")
-        
-        # Load tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(model_config["hf_model_id"])
-        model = AutoModelForSequenceClassification.from_pretrained(model_config["hf_model_id"])
-        
-        # Setup training arguments
+        os.makedirs(output_path, exist_ok=True)
+
+        if task_type == "classification":
+            logger.info("Detected task: classification")
+            def preprocess(examples):
+                return tokenizer(examples["text"], truncation=True, padding="max_length")
+
+            tokenized = dataset.map(preprocess, batched=True)
+            model = AutoModelForSequenceClassification.from_pretrained(hf_model_id)
+
+        elif task_type == "seq2seq":
+            logger.info("Detected task: seq2seq")
+            def preprocess(examples):
+                inputs = tokenizer(examples["text"], truncation=True, padding="max_length", max_length=512)
+                targets = tokenizer(examples["label"], truncation=True, padding="max_length", max_length=128)
+                inputs["labels"] = targets["input_ids"]
+                return inputs
+
+            tokenized = dataset.map(preprocess, batched=True)
+            model = AutoModelForSeq2SeqLM.from_pretrained(hf_model_id)
+
+        else:
+            raise ValueError(f"Unsupported task_type: {task_type}")
+
         training_args = TrainingArguments(
             output_dir=output_path,
             num_train_epochs=epochs,
@@ -166,30 +83,31 @@ def _train_locally(
             per_device_eval_batch_size=batch_size,
             learning_rate=2e-5,
             weight_decay=0.01,
+            #evaluation_strategy="epoch",
             save_strategy="epoch",
-            evaluation_strategy="epoch",
+            logging_dir=os.path.join(output_path, "logs"),
+           # predict_with_generate=(task_type == "seq2seq")
         )
-        
-        # Initialize the Trainer
+
         trainer = Trainer(
             model=model,
             args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            train_dataset=tokenized["train"],
+            eval_dataset=tokenized["validation"],
             tokenizer=tokenizer,
+            data_collator=DataCollatorForSeq2Seq(tokenizer, model=model) if task_type == "seq2seq" else None
         )
-        
-        # Start training
-        logger.info(f"Starting local training for {model_name}")
+
+        logger.info("Starting training...")
         trainer.train()
-        
-        # Save model
+        logger.info("Evaluating model...")
+        trainer.evaluate()
+
         model.save_pretrained(output_path)
         tokenizer.save_pretrained(output_path)
-        
-        logger.info(f"Training completed. Model saved to {output_path}")
+        logger.info(f"✅ Model and tokenizer saved to {output_path}")
         return output_path
-        
+
     except Exception as e:
-        logger.error(f"Error in local training: {str(e)}", exc_info=True)
+        logger.error(f"❌ Training failed: {str(e)}", exc_info=True)
         raise
