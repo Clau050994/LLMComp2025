@@ -163,3 +163,35 @@ models/checkpoints/
 # Logs
 logs/
 *.log
+
+
+# Data files that are large or contain sensitive information
+/Data/raw/
+/Data/processed/
+/data/raw/
+/data/processed/
+*.csv
+*.json
+*.jsonl
+*.txt
+*.tsv
+
+# Specific to your project
+tmp_pdf/
+.cache/
+.vector_cache/
+wandb/
+
+# Experiment tracking
+mlruns/
+runs/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ignore all CSV files except the important ones
+*.csv
+!important_metadata.csv
