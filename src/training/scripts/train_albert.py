@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Fixed training script for MobileBERT model on traveler risk assessment.
-Loads correct train/val/test splits with headers.
+Training script for ALBERT model on traveler risk assessment.
 """
 
 import os
@@ -13,8 +12,8 @@ import torch
 import numpy as np
 from datasets import Dataset
 from transformers import (
-    MobileBertTokenizer, 
-    MobileBertForSequenceClassification,
+    AlbertTokenizer,
+    AlbertForSequenceClassification,
     TrainingArguments,
     Trainer,
     EarlyStoppingCallback
@@ -48,25 +47,21 @@ def main():
     val_df = pd.read_csv(os.path.join(data_dir, "unified_val.csv"))
     test_df = pd.read_csv(os.path.join(data_dir, "unified_test.csv"))
     
-    # Print label distribution
     logger.info("Label distribution in training set:")
     logger.info(train_df['label'].value_counts().to_dict())
     
-    # Ensure labels are integers
     train_df['label'] = train_df['label'].astype(int)
     val_df['label'] = val_df['label'].astype(int)
     test_df['label'] = test_df['label'].astype(int)
     
-    # Convert to datasets
     train_dataset = Dataset.from_pandas(train_df)
     val_dataset = Dataset.from_pandas(val_df)
     test_dataset = Dataset.from_pandas(test_df)
     
     # Initialize tokenizer
-    logger.info("Loading MobileBERT tokenizer...")
-    tokenizer = MobileBertTokenizer.from_pretrained("google/mobilebert-uncased")
+    logger.info("Loading ALBERT tokenizer...")
+    tokenizer = AlbertTokenizer.from_pretrained("albert-base-v2")
     
-    # Tokenize function
     def tokenize_function(examples):
         return tokenizer(
             examples["input_text"],
@@ -75,31 +70,26 @@ def main():
             max_length=128
         )
     
-    # Tokenize datasets
     logger.info("Tokenizing datasets...")
     train_tokenized = train_dataset.map(tokenize_function, batched=True)
     val_tokenized = val_dataset.map(tokenize_function, batched=True)
     test_tokenized = test_dataset.map(tokenize_function, batched=True)
     
-    # Format for PyTorch
     train_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
     val_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
     test_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
     
-    # Define model directory
     model_output_dir = "/disk/diamond-scratch/cvaro009/data/albert"
     os.makedirs(model_output_dir, exist_ok=True)
     
-    # Load model
-    logger.info("Loading MobileBERT model...")
-    model = MobileBertForSequenceClassification.from_pretrained(
-        "google/mobilebert-uncased",
+    logger.info("Loading ALBERT model...")
+    model = AlbertForSequenceClassification.from_pretrained(
+        "albert-base-v2",
         num_labels=3
     )
     
     logger.info(f"Model initialized with {model.config.num_labels} output classes")
     
-    # Training arguments
     training_args = TrainingArguments(
         output_dir=model_output_dir,
         eval_strategy="epoch",
@@ -107,7 +97,7 @@ def main():
         learning_rate=3e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=32,
-        num_train_epochs=8,
+        num_train_epochs=10,
         weight_decay=0.01,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
@@ -117,7 +107,6 @@ def main():
         max_grad_norm=1.0
     )
     
-    # Trainer
     logger.info("Initializing trainer...")
     trainer = Trainer(
         model=model,
@@ -128,21 +117,17 @@ def main():
         callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
     )
     
-    # Train model
-    logger.info("Starting MobileBERT training...")
+    logger.info("Starting ALBERT training...")
     trainer.train()
     
-    # Evaluate model
     logger.info("Evaluating on test set...")
     test_results = trainer.evaluate(test_tokenized)
     
-    # Print results
-    logger.info("\nMobileBERT Results:")
+    logger.info("\nALBERT Results:")
     logger.info(f"Best validation metric: {trainer.state.best_metric:.4f}")
     logger.info(f"Test accuracy: {test_results['eval_accuracy']:.4f}")
     logger.info(f"Test F1: {test_results['eval_f1']:.4f}")
     
-    # Save model
     trainer.save_model(model_output_dir)
     tokenizer.save_pretrained(model_output_dir)
     logger.info(f"Model and tokenizer saved to {model_output_dir}")
