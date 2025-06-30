@@ -1,497 +1,285 @@
 import os
 import json
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import torch
-from transformers import (
-    AutoTokenizer, 
-    AutoModelForSequenceClassification,
-    pipeline
-)
-from sklearn.metrics import (
-    accuracy_score, precision_recall_fscore_support, 
-    confusion_matrix, classification_report
-)
 import time
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 from pathlib import Path
-import onnxruntime as ort
-import argparse
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, ConfusionMatrixDisplay
+import psutil
+import random
+from torch.utils.data import DataLoader
 
-# Set style for plots
-plt.style.use('fivethirtyeight')
-sns.set_palette("colorblind")
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-class ModelComparison:
-    def __init__(self, base_dir="models/traveler_classification/", 
-                 test_data_path="data/processed/unified/unified_test.csv", 
-                 results_dir="results/model_comparison"):
-        """Initialize model comparison with paths."""
-        self.base_dir = base_dir
-        self.test_data_path = test_data_path
-        self.results_dir = results_dir
-        self.models_to_compare = []
-        self.results = {}
-        self.onnx_models = {}
-        
-        # Create results directory
-        os.makedirs(results_dir, exist_ok=True)
-        
-        # Load test data
-        self.test_df = pd.read_csv(test_data_path)
-        print(f"Loaded test data with {len(self.test_df)} examples")
-        
-        # Label mapping
-        self.id2label = {0: "Low Risk", 1: "Medium Risk", 2: "High Risk"}
-        self.label2id = {v: k for k, v in self.id2label.items()}
+def load_test_data(data_path):
+    print(f"Loading test data from {data_path}")
+    test_df = pd.read_csv(data_path)
+    if 'text' in test_df.columns and 'input_text' not in test_df.columns:
+        test_df['input_text'] = test_df['text']
+    print(f"Loaded test data with {len(test_df)} examples")
+    return test_df, Dataset.from_pandas(test_df)
 
-    def add_model(self, model_name, model_type="hf"):
-        """Add a model to compare."""
-        model_path = os.path.join(self.base_dir, f"{model_name}_risk_assessment")
-        
-        if not os.path.exists(model_path):
-            print(f"Warning: Model path {model_path} not found. Skipping.")
-            return
-            
-        print(f"Adding model: {model_name} ({model_type})")
-        self.models_to_compare.append({
+def plot_confusion_matrix(y_true, y_pred, model_name, out_dir):
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title(f"Confusion Matrix: {model_name}")
+    plt.savefig(os.path.join(out_dir, f"confusion_matrix_{model_name}.png"))
+    plt.close()
+
+def evaluate_accuracy(model, tokenizer, test_dataset, device, model_name, out_dir):
+    def preprocess_function(examples):
+        return tokenizer(examples["input_text"], truncation=True, padding="max_length", max_length=128)
+    test_tokenized = test_dataset.map(preprocess_function, batched=True)
+    if "input_text" in test_tokenized.column_names:
+        test_tokenized = test_tokenized.remove_columns(["input_text"])
+    test_tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+    test_dataloader = DataLoader(test_tokenized, batch_size=16)
+    model.to(device)
+    model.eval()
+    start_time = time.time()
+    y_pred, y_true = [], []
+    with torch.no_grad():
+        for batch in tqdm(test_dataloader, desc=f"Evaluating {model_name}"):
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**{k: v for k, v in batch.items() if k != "label"})
+            predictions = outputs.logits.argmax(dim=-1)
+            y_pred.extend(predictions.cpu().numpy())
+            y_true.extend(batch["label"].cpu().numpy())
+    accuracy = accuracy_score(y_true, y_pred)
+    precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="weighted")
+    cm = confusion_matrix(y_true, y_pred)
+    total_time = time.time() - start_time
+    avg_time_per_sample = total_time / len(y_true) * 1000  # ms
+    plot_confusion_matrix(y_true, y_pred, model_name, out_dir)
+    return {
+        "accuracy": accuracy * 100,
+        "precision": precision * 100,
+        "recall": recall * 100,
+        "f1": f1 * 100,
+        "confusion_matrix": cm.tolist(),
+        "total_inference_time_s": total_time,
+        "avg_inference_time_ms": avg_time_per_sample
+    }
+
+def measure_latency(model, tokenizer, device, num_runs=50, batch_sizes=[1, 8]):
+    sample_text = "Traveler from Canada with valid passport seeking entry for tourism for 2 weeks"
+    latency_results = {}
+    encoded = tokenizer(sample_text, return_tensors="pt").to(device)
+    for _ in range(10):
+        _ = model(**encoded)
+    for batch_size in batch_sizes:
+        batch_encoded = {k: v.repeat(batch_size, 1) for k, v in encoded.items()} if batch_size > 1 else encoded
+        latencies = []
+        for _ in range(num_runs):
+            if device == "cuda":
+                torch.cuda.synchronize()
+            start_time = time.time()
+            _ = model(**batch_encoded)
+            if device == "cuda":
+                torch.cuda.synchronize()
+            latencies.append((time.time() - start_time) * 1000)  # ms
+        per_item_latencies = [l / batch_size for l in latencies]
+        latency_results[f"batch_size_{batch_size}"] = {
+            "mean_ms": np.mean(latencies),
+            "p50_ms": np.percentile(latencies, 50),
+            "p90_ms": np.percentile(latencies, 90),
+            "p99_ms": np.percentile(latencies, 99),
+            "per_item_mean_ms": np.mean(per_item_latencies)
+        }
+    return latency_results
+
+def measure_model_size(model_path):
+    total_size = 0
+    for path in Path(model_path).glob('**/*'):
+        if path.is_file():
+            total_size += path.stat().st_size
+    file_sizes = {}
+    for path in Path(model_path).glob('*'):
+        if path.is_file():
+            file_sizes[path.name] = path.stat().st_size / (1024 * 1024)  # MB
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    param_count = sum(p.numel() for p in model.parameters())
+    trainable_param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return {
+        "disk_size_mb": total_size / (1024 * 1024),
+        "file_sizes_mb": file_sizes,
+        "parameters": param_count,
+        "trainable_parameters": trainable_param_count
+    }
+
+def measure_memory_usage(model, tokenizer, device, batch_size=1):
+    sample_text = "Traveler from Canada with valid passport seeking entry for tourism for 2 weeks"
+    encoded = tokenizer(sample_text, return_tensors="pt").to(device)
+    if batch_size > 1:
+        encoded = {k: v.repeat(batch_size, 1) for k, v in encoded.items()}
+    if device == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.empty_cache()
+        _ = model(**encoded)
+        peak_memory = torch.cuda.max_memory_allocated() / (1024 * 1024)  # MB
+    else:
+        process = psutil.Process(os.getpid())
+        base_memory = process.memory_info().rss / (1024 * 1024)
+        _ = model(**encoded)
+        post_memory = process.memory_info().rss / (1024 * 1024)
+        peak_memory = post_memory - base_memory
+    return {"peak_memory_mb": peak_memory}
+
+def add_noise(text, noise_type="typos", noise_level=0.1):
+    if noise_type == "typos":
+        chars = list(text)
+        n_errors = max(1, int(len(chars) * noise_level))
+        indices = random.sample(range(len(chars)), n_errors)
+        for idx in indices:
+            chars[idx] = random.choice("abcdefghijklmnopqrstuvwxyz ")
+        return "".join(chars)
+    elif noise_type == "missing_words":
+        words = text.split()
+        n_to_delete = max(1, int(len(words) * noise_level))
+        indices = random.sample(range(len(words)), n_to_delete)
+        return " ".join([w for i, w in enumerate(words) if i not in indices])
+    elif noise_type == "ocr_errors":
+        ocr_map = {"0": "o", "1": "l", "2": "z", "5": "s", "8": "b", "o": "0", "l": "1", "z": "2", "s": "5", "b": "8"}
+        chars = list(text)
+        n_errors = max(1, int(len(chars) * noise_level))
+        indices = random.sample(range(len(chars)), n_errors)
+        for idx in indices:
+            if chars[idx] in ocr_map:
+                chars[idx] = ocr_map[chars[idx]]
+        return "".join(chars)
+    return text
+
+def test_robustness(model, tokenizer, test_df, device, num_samples=50):
+    sample_indices = random.sample(range(len(test_df)), num_samples)
+    text_column = "input_text" if "input_text" in test_df.columns else "text"
+    sample_texts = test_df.iloc[sample_indices][text_column].tolist()
+    sample_labels = test_df.iloc[sample_indices]["label"].tolist()
+    encoded = tokenizer(sample_texts, padding=True, truncation=True, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**encoded)
+    baseline_preds = outputs.logits.argmax(dim=-1).cpu().numpy()
+    baseline_acc = accuracy_score(sample_labels, baseline_preds) * 100
+    results = {"baseline_accuracy": baseline_acc}
+    noise_types = ["typos", "missing_words", "ocr_errors"]
+    noise_levels = [0.05, 0.1, 0.2]
+    for noise_type in noise_types:
+        noise_results = {}
+        for noise_level in noise_levels:
+            noisy_texts = [add_noise(text, noise_type, noise_level) for text in sample_texts]
+            encoded = tokenizer(noisy_texts, padding=True, truncation=True, return_tensors="pt").to(device)
+            with torch.no_grad():
+                outputs = model(**encoded)
+            noisy_preds = outputs.logits.argmax(dim=-1).cpu().numpy()
+            noisy_acc = accuracy_score(sample_labels, noisy_preds) * 100
+            robustness = noisy_acc / baseline_acc if baseline_acc > 0 else 0
+            noise_results[f"level_{noise_level}"] = {
+                "accuracy": noisy_acc,
+                "robustness_score": robustness,
+                "accuracy_drop": baseline_acc - noisy_acc
+            }
+        results[noise_type] = noise_results
+    return results
+
+def evaluate_model(model_name, model_path, test_df, test_dataset, results_dir):
+    print(f"\n{'-'*60}\nEvaluating model: {model_name}\n{'-'*60}")
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        model.to(device)
+        print("Measuring model size...")
+        size_metrics = measure_model_size(model_path)
+        print(f"  Model size: {size_metrics['disk_size_mb']:.2f} MB")
+        print(f"  Parameters: {size_metrics['parameters']:,}")
+        print("Evaluating accuracy...")
+        accuracy_metrics = evaluate_accuracy(model, tokenizer, test_dataset, device, model_name, results_dir)
+        print(f"  Accuracy: {accuracy_metrics['accuracy']:.2f}%")
+        print(f"  F1 Score: {accuracy_metrics['f1']:.2f}%")
+        print(f"  Avg inference time: {accuracy_metrics['avg_inference_time_ms']:.2f} ms per example")
+        print("Measuring latency...")
+        latency_metrics = measure_latency(model, tokenizer, device)
+        print(f"  Batch size 1: {latency_metrics['batch_size_1']['mean_ms']:.2f} ms")
+        if 'batch_size_8' in latency_metrics:
+            print(f"  Batch size 8 (per item): {latency_metrics['batch_size_8']['per_item_mean_ms']:.2f} ms")
+        print("Measuring memory usage...")
+        memory_metrics = measure_memory_usage(model, tokenizer, device)
+        print(f"  Peak memory: {memory_metrics['peak_memory_mb']:.2f} MB")
+        print("Testing robustness...")
+        robustness_metrics = test_robustness(model, tokenizer, test_df, device)
+        print(f"  Baseline accuracy: {robustness_metrics['baseline_accuracy']:.2f}%")
+        print(f"  Robustness to 10% typos: {robustness_metrics['typos']['level_0.1']['robustness_score']:.2f}")
+        results = {
             "name": model_name,
             "path": model_path,
-            "type": model_type,
-            "display_name": self.get_display_name(model_name)
-        })
-    
-    def get_display_name(self, model_name):
-        """Get a cleaner display name for plots."""
-        name_map = {
-            "distilbert": "DistilBERT",
-            "albert": "ALBERT",
-            "mobilebert": "MobileBERT",
-            "tinyllama": "TinyLLaMA",
-            "mobilellama": "MobileLLaMA",
-            "grok": "Grok-3 mini",
-            "flan": "Flan-T5"
+            "size": size_metrics,
+            "accuracy": accuracy_metrics,
+            "latency": latency_metrics,
+            "memory": memory_metrics,
+            "robustness": robustness_metrics
         }
-        return name_map.get(model_name, model_name)
-    
-    def add_onnx_model(self, model_name):
-        """Add an ONNX model to compare."""
-        onnx_path = os.path.join("models", "onnx", f"{model_name}_risk_assessment", "model.onnx")
-        tokenizer_path = os.path.join(self.base_dir, f"{model_name}_risk_assessment")
-        
-        if not os.path.exists(onnx_path):
-            print(f"Warning: ONNX model {onnx_path} not found. Skipping.")
-            return
-            
-        print(f"Adding ONNX model: {model_name}")
-        self.models_to_compare.append({
-            "name": f"{model_name}_onnx",
-            "path": onnx_path,
-            "tokenizer_path": tokenizer_path,
-            "type": "onnx",
-            "display_name": f"{self.get_display_name(model_name)} (ONNX)"
-        })
-        
-    def evaluate_model(self, model_info):
-        """Evaluate a single model and return performance metrics."""
-        model_name = model_info["name"]
-        model_path = model_info["path"]
-        model_type = model_info["type"]
-        
-        print(f"\nEvaluating {model_name}...")
-        
-        # For PyTorch/HF models
-        if model_type == "hf":
-            try:
-                # Load tokenizer and model
-                tokenizer = AutoTokenizer.from_pretrained(model_path)
-                model = AutoModelForSequenceClassification.from_pretrained(model_path)
-                
-                # Get model size
-                model_size = sum(p.numel() for p in model.parameters()) / 1e6  # in millions
-                
-                # Create classifier pipeline
-                classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=0 if torch.cuda.is_available() else -1)
-                
-                # Measure inference time
-                start_time = time.time()
-                
-                # Process test examples
-                predictions = []
-                for _, row in self.test_df.iterrows():
-                    result = classifier(row["input_text"])
-                    pred_label = int(result[0]["label"].split("_")[-1])
-                    predictions.append(pred_label)
-                
-                # Calculate time
-                total_time = time.time() - start_time
-                avg_inference_time = total_time / len(self.test_df) * 1000  # in ms
-                
-                # Compute metrics
-                true_labels = self.test_df["label"].values
-                precision, recall, f1, _ = precision_recall_fscore_support(
-                    true_labels, predictions, average="weighted"
-                )
-                accuracy = accuracy_score(true_labels, predictions)
-                cm = confusion_matrix(true_labels, predictions)
-                
-                # Get file size
-                model_file_size = self.get_directory_size(model_path) / (1024 * 1024)  # MB
-                
-                return {
-                    "name": model_name,
-                    "display_name": model_info["display_name"],
-                    "accuracy": accuracy * 100,
-                    "precision": precision * 100,
-                    "recall": recall * 100,
-                    "f1": f1 * 100,
-                    "parameters": model_size,
-                    "file_size": model_file_size,
-                    "inference_time_ms": avg_inference_time,
-                    "confusion_matrix": cm,
-                    "predictions": predictions,
-                    "true_labels": true_labels
-                }
-            
-            except Exception as e:
-                print(f"Error evaluating {model_name}: {e}")
-                return None
-                
-        # For ONNX models
-        elif model_type == "onnx":
-            try:
-                tokenizer_path = model_info["tokenizer_path"]
-                tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-                session = ort.InferenceSession(model_path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'] 
-                                            if 'CUDAExecutionProvider' in ort.get_available_providers() 
-                                            else ['CPUExecutionProvider'])
-                
-                # Measure inference time
-                start_time = time.time()
-                
-                # Process test examples
-                predictions = []
-                for _, row in self.test_df.iterrows():
-                    # Tokenize input
-                    inputs = tokenizer(row["input_text"], return_tensors="np", padding=True, truncation=True)
-                    
-                    # Run inference
-                    ort_inputs = {
-                        "input_ids": inputs["input_ids"],
-                        "attention_mask": inputs["attention_mask"]
-                    }
-                    logits = session.run(None, ort_inputs)[0]
-                    
-                    # Get prediction
-                    pred_label = np.argmax(logits, axis=1)[0]
-                    predictions.append(pred_label)
-                
-                # Calculate time
-                total_time = time.time() - start_time
-                avg_inference_time = total_time / len(self.test_df) * 1000  # in ms
-                
-                # Compute metrics
-                true_labels = self.test_df["label"].values
-                precision, recall, f1, _ = precision_recall_fscore_support(
-                    true_labels, predictions, average="weighted"
-                )
-                accuracy = accuracy_score(true_labels, predictions)
-                cm = confusion_matrix(true_labels, predictions)
-                
-                # Get file size
-                model_file_size = os.path.getsize(model_path) / (1024 * 1024)  # MB
-                
-                return {
-                    "name": model_name,
-                    "display_name": model_info["display_name"],
-                    "accuracy": accuracy * 100,
-                    "precision": precision * 100,
-                    "recall": recall * 100,
-                    "f1": f1 * 100,
-                    "parameters": "N/A",  # Parameter count not available for ONNX
-                    "file_size": model_file_size,
-                    "inference_time_ms": avg_inference_time,
-                    "confusion_matrix": cm,
-                    "predictions": predictions,
-                    "true_labels": true_labels
-                }
-            
-            except Exception as e:
-                print(f"Error evaluating ONNX model {model_name}: {e}")
-                return None
-    
-    def get_directory_size(self, directory):
-        """Calculate the total size of a directory in bytes."""
-        total_size = 0
-        for path in Path(directory).glob('**/*'):
-            if path.is_file():
-                total_size += path.stat().st_size
-        return total_size
-    
-    def run_comparison(self):
-        """Run evaluation on all models and collect results."""
-        for model_info in self.models_to_compare:
-            result = self.evaluate_model(model_info)
-            if result:
-                self.results[model_info["name"]] = result
-                
-        # Save results
-        with open(os.path.join(self.results_dir, "model_comparison_results.json"), "w") as f:
-            # Convert numpy arrays to lists for JSON serialization
-            serializable_results = {}
-            for model_name, result in self.results.items():
-                serializable_result = {k: v if not isinstance(v, np.ndarray) else v.tolist() 
-                                      for k, v in result.items()}
-                serializable_results[model_name] = serializable_result
-            
-            json.dump(serializable_results, f, indent=2)
-        
-    def generate_visualizations(self):
-        """Generate visualization comparisons."""
-        if not self.results:
-            print("No results available for visualization. Run comparison first.")
-            return
-            
-        # Convert results to DataFrame for easier plotting
-        results_df = pd.DataFrame([
-            {
-                "Model": result["display_name"],
-                "Accuracy": result["accuracy"],
-                "F1 Score": result["f1"],
-                "Precision": result["precision"],
-                "Recall": result["recall"],
-                "Inference Time (ms)": result["inference_time_ms"],
-                "File Size (MB)": result["file_size"],
-                "Parameters (M)": result["parameters"] if result["parameters"] != "N/A" else None
-            }
-            for result in self.results.values()
-        ])
-        
-        # Sort by F1 score
-        results_df = results_df.sort_values("F1 Score", ascending=False)
-        
-        # Save as CSV
-        results_df.to_csv(os.path.join(self.results_dir, "model_comparison_summary.csv"), index=False)
-        
-        print("\nModel Performance Summary:")
-        print(results_df[["Model", "F1 Score", "Accuracy", "Inference Time (ms)", "File Size (MB)"]])
-        
-        # 1. Performance Metrics Bar Chart
-        plt.figure(figsize=(14, 8))
-        performance_df = results_df.melt(
-            id_vars="Model", 
-            value_vars=["Accuracy", "F1 Score", "Precision", "Recall"],
-            var_name="Metric", value_name="Score"
-        )
-        
-        sns.barplot(x="Model", y="Score", hue="Metric", data=performance_df)
-        plt.title("Model Performance Comparison", fontsize=16)
-        plt.xlabel("Model", fontsize=14)
-        plt.ylabel("Score (%)", fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, "performance_comparison.png"), dpi=300)
-        plt.close()
-        
-        # 2. Inference Time vs Accuracy Scatter Plot
-        plt.figure(figsize=(12, 8))
-        sns.scatterplot(
-            x="Inference Time (ms)", 
-            y="F1 Score", 
-            size="File Size (MB)",
-            sizes=(100, 1000),
-            alpha=0.7,
-            hue="Model",
-            data=results_df
-        )
-        
-        for i, row in results_df.iterrows():
-            plt.text(
-                row["Inference Time (ms)"] + 0.5, 
-                row["F1 Score"] + 0.1, 
-                row["Model"], 
-                fontsize=10
-            )
-            
-        plt.title("F1 Score vs Inference Time", fontsize=16)
-        plt.xlabel("Inference Time (ms)", fontsize=14)
-        plt.ylabel("F1 Score (%)", fontsize=14)
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, "inference_vs_f1.png"), dpi=300)
-        plt.close()
-        
-        # 3. Model Size vs Performance
-        plt.figure(figsize=(12, 8))
-        
-        hb = sns.scatterplot(
-            x="File Size (MB)", 
-            y="F1 Score",
-            size="Inference Time (ms)",
-            sizes=(100, 1000),
-            alpha=0.7,
-            hue="Model",
-            data=results_df
-        )
-        
-        for i, row in results_df.iterrows():
-            plt.text(
-                row["File Size (MB)"] * 1.05, 
-                row["F1 Score"] - 0.1, 
-                row["Model"], 
-                fontsize=10
-            )
-        
-        plt.title("F1 Score vs Model Size", fontsize=16)
-        plt.xlabel("Model Size (MB)", fontsize=14)
-        plt.ylabel("F1 Score (%)", fontsize=14)
-        plt.xscale('log')  # Log scale for better visualization of size differences
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, "size_vs_f1.png"), dpi=300)
-        plt.close()
-        
-        # 4. Confusion Matrices
-        for model_name, result in self.results.items():
-            plt.figure(figsize=(8, 6))
-            cm = result["confusion_matrix"]
-            sns.heatmap(
-                cm, 
-                annot=True, 
-                fmt='d', 
-                cmap='Blues',
-                xticklabels=[self.id2label[i] for i in range(3)],
-                yticklabels=[self.id2label[i] for i in range(3)]
-            )
-            plt.title(f"Confusion Matrix - {result['display_name']}", fontsize=14)
-            plt.xlabel("Predicted Label", fontsize=12)
-            plt.ylabel("True Label", fontsize=12)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.results_dir, f"confusion_matrix_{model_name}.png"), dpi=300)
-            plt.close()
-            
-        # 5. Performance across risk categories
-        for model_name, result in self.results.items():
-            # Get per-class metrics
-            report = classification_report(
-                result["true_labels"], 
-                result["predictions"],
-                output_dict=True
-            )
-            
-            # Extract metrics by class
-            class_metrics = {
-                "Low Risk": {metric: report["0"][metric] for metric in ["precision", "recall", "f1-score"]},
-                "Medium Risk": {metric: report["1"][metric] for metric in ["precision", "recall", "f1-score"]},
-                "High Risk": {metric: report["2"][metric] for metric in ["precision", "recall", "f1-score"]}
-            }
-            
-            # Convert to DataFrame
-            class_df = pd.DataFrame({
-                "Risk Category": list(class_metrics.keys()),
-                "Precision": [v["precision"] for v in class_metrics.values()],
-                "Recall": [v["recall"] for v in class_metrics.values()],
-                "F1 Score": [v["f1-score"] for v in class_metrics.values()]
-            })
-            
-            # Plot
-            plt.figure(figsize=(10, 6))
-            class_plot_df = class_df.melt(
-                id_vars="Risk Category",
-                value_vars=["Precision", "Recall", "F1 Score"],
-                var_name="Metric", value_name="Score"
-            )
-            
-            sns.barplot(x="Risk Category", y="Score", hue="Metric", data=class_plot_df)
-            plt.title(f"Performance by Risk Category - {result['display_name']}", fontsize=14)
-            plt.xlabel("Risk Category", fontsize=12)
-            plt.ylabel("Score", fontsize=12)
-            plt.ylim(0, 1.0)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.results_dir, f"class_performance_{model_name}.png"), dpi=300)
-            plt.close()
-        
-        # 6. Combined performance visualization
-        plt.figure(figsize=(15, 10))
-        
-        # Create a radar chart for each model
-        categories = ['Accuracy', 'F1 Score', 'Inference Speed', 'Size Efficiency']
-        colors = plt.cm.rainbow(np.linspace(0, 1, len(results_df)))
-        
-        # Normalize the metrics for the radar chart
-        max_inference = results_df["Inference Time (ms)"].max()
-        max_size = results_df["File Size (MB)"].max()
-        
-        # Prepare data for radar chart
-        model_data = []
-        
-        for i, row in results_df.iterrows():
-            # Normalize and invert inference time and size (lower is better)
-            speed_score = 100 * (1 - (row["Inference Time (ms)"] / max_inference))
-            size_score = 100 * (1 - (row["File Size (MB)"] / max_size))
-            model_data.append([
-                row["Accuracy"],  # Accuracy
-                row["F1 Score"],  # F1
-                speed_score,      # Inference Speed (normalized and inverted)
-                size_score        # Size Efficiency (normalized and inverted)
-            ])
-        
-        # Plot radar chart
-        angles = np.linspace(0, 2*np.pi, len(categories), endpoint=False).tolist()
-        angles += angles[:1]  # Close the loop
-        
-        fig, ax = plt.subplots(figsize=(12, 10), subplot_kw=dict(polar=True))
-        
-        for i, model in enumerate(results_df["Model"]):
-            values = model_data[i]
-            values += values[:1]  # Close the loop
-            ax.plot(angles, values, 'o-', linewidth=2, color=colors[i], label=model)
-            ax.fill(angles, values, alpha=0.1, color=colors[i])
-        
-        ax.set_thetagrids(np.degrees(angles[:-1]), categories)
-        ax.set_ylim(0, 100)
-        ax.grid(True)
-        plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0))
-        plt.title("Model Performance Trade-offs", fontsize=16)
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.results_dir, "model_tradeoffs_radar.png"), dpi=300)
-        plt.close()
-        
-        print(f"\nVisualizations saved to {self.results_dir}")
+        os.makedirs(results_dir, exist_ok=True)
+        with open(os.path.join(results_dir, f"{model_name}_results.json"), "w") as f:
+            json.dump(results, f, default=lambda obj: obj.tolist() if isinstance(obj, np.ndarray) else float(obj) if isinstance(obj, (np.float32, np.float64)) else int(obj) if isinstance(obj, np.integer) else obj, indent=2)
+        return results
+    except Exception as e:
+        print(f"Error evaluating {model_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"name": model_name, "path": model_path, "error": str(e)}
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare different models for traveler risk classification")
-    parser.add_argument("--include-onnx", action="store_true", help="Include ONNX model versions in comparison")
-    args = parser.parse_args()
-    
-    # Initialize comparison
-    comparison = ModelComparison()
-    
-    # Add Hugging Face models
-    comparison.add_model("distilbert")
-    comparison.add_model("albert")
-    comparison.add_model("mobilebert")
-    comparison.add_model("tinyllama")
-    comparison.add_model("mobilellama")
-    
-    # Add other models if they exist
-    comparison.add_model("grok")
-    comparison.add_model("flan")
-    
-    # Add ONNX models if requested
-    if args.include_onnx:
-        comparison.add_onnx_model("distilbert")
-        comparison.add_onnx_model("albert")
-        comparison.add_onnx_model("mobilebert")
-        comparison.add_onnx_model("tinyllama")
-        comparison.add_onnx_model("mobilellama")
-    
-    # Run comparison
-    comparison.run_comparison()
-    
-    # Generate visualizations
-    comparison.generate_visualizations()
+    set_seed(42)
+    test_data_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
+    results_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/evaluation_results"
+    os.makedirs(results_dir, exist_ok=True)
+    test_df, test_dataset = load_test_data(test_data_path)
+    models = [
+    {"name": "albert", "path": "/disk/diamond-scratch/cvaro009/data/albert"},
+    {"name": "mobilebert", "path": "/disk/diamond-scratch/cvaro009/data/mobilebert"},
+    {"name": "distilbert", "path": "/disk/diamond-scratch/cvaro009/data/distilbert"},
+    {"name": "tinyllama", "path": "/disk/diamond-scratch/cvaro009/data/tinyllama"},
+    {"name": "mobilellama", "path": "/disk/diamond-scratch/cvaro009/data/mobilellama_risk_assessment"}
+]
+    all_results = {}
+    for model_info in models:
+        model_name = model_info["name"]
+        model_path = model_info["path"]
+        if not os.path.exists(model_path):
+            print(f"Warning: Model path {model_path} not found. Skipping.")
+            continue
+        result = evaluate_model(model_name, model_path, test_df, test_dataset, results_dir)
+        if result and "error" not in result:
+            all_results[model_name] = result
+    with open(os.path.join(results_dir, "all_models_results.json"), "w") as f:
+        json.dump(all_results, f, default=lambda obj: obj.tolist() if isinstance(obj, np.ndarray) else float(obj) if isinstance(obj, (np.float32, np.float64)) else int(obj) if isinstance(obj, np.integer) else obj, indent=2)
+    summary = []
+    for model_name, result in all_results.items():
+        summary.append({
+            "Model": model_name.upper(),
+            "F1 Score": f"{result['accuracy']['f1']:.2f}%",
+            "Accuracy": f"{result['accuracy']['accuracy']:.2f}%",
+            "Inference Time (ms)": f"{result['accuracy']['avg_inference_time_ms']:.2f}",
+            "Model Size (MB)": f"{result['size']['disk_size_mb']:.2f}",
+            "Memory (MB)": f"{result['memory']['peak_memory_mb']:.2f}",
+            "Robustness Score": f"{result['robustness']['typos']['level_0.1']['robustness_score']:.2f}"
+        })
+    summary_df = pd.DataFrame(summary)
+    summary_df.to_csv(os.path.join(results_dir, "model_comparison_summary.csv"), index=False)
+    print("\nModel Performance Summary:")
+    print(summary_df.to_string(index=False))
+    print(f"\nResults saved to {results_dir}")
 
 if __name__ == "__main__":
     main()
