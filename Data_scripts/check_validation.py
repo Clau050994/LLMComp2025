@@ -1,19 +1,33 @@
 import pandas as pd
 
-# Check validation file
-val_file = "data/processed/unified/unified_val.csv"
-val_df = pd.read_csv(val_file)
-print("Validation file columns:", val_df.columns.tolist())
-print("Validation file sample:\n", val_df.head(3))
-print("Validation labels distribution:", val_df['label'].value_counts().to_dict() if 'label' in val_df.columns else "No label column found")
+# Load your data
+df = pd.read_csv("data/processed/unified/unified_complete_labeled.csv", header=None, names=["input_text", "label", "example_type"])
 
-# Check test file
-test_file = "data/processed/unified/unified_test.csv"
-test_df = pd.read_csv(test_file)
-print("\nTest file columns:", test_df.columns.tolist())
-print("Test file sample:\n", test_df.head(3))
-print("Test labels distribution:", test_df['label'].value_counts().to_dict() if 'label' in test_df.columns else "No label column found")
+# Show a few random samples for manual inspection
+print(df.sample(10))
 
-# Check if example_type exists in validation/test files
-print("\nExample type in validation:", 'example_type' in val_df.columns)
-print("Example type in test:", 'example_type' in test_df.columns)
+# Check label distribution by example_type
+print("\nLabel distribution by example_type:")
+print(df.groupby("example_type")["label"].value_counts())
+
+# Check for sentences with multiple country mentions
+import re
+
+def count_countries(text):
+    # Example: crude country detection (replace with your country list for accuracy)
+    countries = ["China", "Beijing", "Pakistan", "Iran", "Syria", "France", "Eiffel Tower"]
+    return sum(1 for c in countries if c.lower() in text.lower())
+
+df["country_mentions"] = df["input_text"].apply(count_countries)
+print("\nRows with more than one country mention:")
+print(df[df["country_mentions"] > 1][["input_text", "label", "example_type"]].head(10))
+
+# Check if non-origin examples with country mentions are labeled as 0
+non_origin = df[(df["example_type"] != "origin") & (df["country_mentions"] > 0)]
+print("\nNon-origin examples with country mentions (should be label 0):")
+print(non_origin[non_origin["label"] != 0][["input_text", "label", "example_type"]])
+
+# Check if origin examples are labeled as risky (1 or 2)
+origin = df[df["example_type"] == "origin"]
+print("\nOrigin examples label distribution:")
+print(origin["label"].value_counts())

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced evaluation script for DistilBERT model with additional metrics:
+Enhanced evaluation script for ALBERT model with additional metrics:
 - Detailed error analysis
 - Performance by example category
 - Model size and RAM utilization
@@ -11,47 +11,42 @@ Enhanced evaluation script for DistilBERT model with additional metrics:
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"  
-import sys
 import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tqdm import tqdm
 import torch
 from datasets import Dataset
 from transformers import (
-    DistilBertTokenizerFast,
-    DistilBertForSequenceClassification,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
     Trainer
 )
 from sklearn.metrics import (
     accuracy_score, 
     precision_recall_fscore_support, 
     confusion_matrix, 
-    classification_report,
     roc_auc_score,
     f1_score
 )
 import psutil  # For RAM utilization
 
-# ---- SET YOUR PATHS HERE ----
-MODEL_PATH = "/disk/diamond-scratch/cvaro009/data/distilbert"
-TEST_FILE = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/improved_data/unified_test.csv"
-OUTPUT_DIR = "/aul/homes/cvaro009/Desktop/LLMComp2025/resultstest"
-# -----------------------------
+# --------- SET YOUR PATHS HERE ---------
+MODEL_PATH = "/disk/diamond-scratch/cvaro009/data/albert"
+TEST_FILE = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
+OUTPUT_DIR = "/aul/homes/cvaro009/Desktop/LLMComp2025/results_albert"
+# ---------------------------------------
 
 def load_model_and_tokenizer(model_path):
-    """Load the model and tokenizer from the specified path"""
     print(f"Loading model from {model_path}...")
-    model = DistilBertForSequenceClassification.from_pretrained(model_path)
-    tokenizer = DistilBertTokenizerFast.from_pretrained(model_path)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     model_size_mb = sum(p.numel() * p.element_size() for p in model.parameters()) / (1024 * 1024)
     print(f"Model loaded: {model_size_mb:.2f} MB")
     return model, tokenizer
 
 def load_dataset(data_path, has_header=True):
-    """Load and prepare dataset from CSV file"""
     if has_header:
         df = pd.read_csv(data_path)
     else:
@@ -59,7 +54,6 @@ def load_dataset(data_path, has_header=True):
     return Dataset.from_pandas(df)
 
 def tokenize_dataset(dataset, tokenizer):
-    """Tokenize the dataset using the provided tokenizer"""
     def tokenize_function(examples):
         return tokenizer(
             examples["input_text"], 
@@ -76,7 +70,6 @@ def tokenize_dataset(dataset, tokenizer):
     return tokenized_dataset
 
 def compute_metrics(pred):
-    """Compute comprehensive metrics for model evaluation"""
     labels = pred.label_ids
     preds = torch.argmax(torch.tensor(pred.predictions), dim=1).numpy()
     precision, recall, f1, support = precision_recall_fscore_support(
@@ -105,7 +98,6 @@ def compute_metrics(pred):
     }
 
 def evaluate_model(model, eval_dataset, device=None):
-    """Evaluate model on dataset and return predictions and metrics"""
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -127,7 +119,6 @@ def evaluate_model(model, eval_dataset, device=None):
     return preds, labels, metrics
 
 def plot_confusion_matrix(cm, save_path=None):
-    """Plot and save confusion matrix"""
     plt.figure(figsize=(10, 8))
     sns.heatmap(
         cm, 
@@ -146,7 +137,6 @@ def plot_confusion_matrix(cm, save_path=None):
     plt.show()
 
 def analyze_errors(df, preds, examples_to_show=10):
-    """Analyze and print examples of misclassified instances"""
     df['predicted'] = preds
     df['is_error'] = df['label'] != df['predicted']
     errors = df[df['is_error']].copy()
@@ -171,7 +161,6 @@ def analyze_errors(df, preds, examples_to_show=10):
         print("-" * 80)
 
 def evaluate_performance_by_category(df, preds):
-    """Evaluate performance broken down by example type"""
     if 'example_type' not in df.columns:
         print("No 'example_type' column found in dataset.")
         return
@@ -195,7 +184,6 @@ def evaluate_performance_by_category(df, preds):
     print(results_df)
 
 def benchmark_comparison(metrics):
-    """Compare model performance against common benchmarks"""
     print("\nModel Performance in Context:")
     benchmarks = {
         "Random Baseline (3 classes)": 0.33,
