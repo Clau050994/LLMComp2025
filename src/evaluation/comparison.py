@@ -13,6 +13,8 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, con
 import psutil
 import random
 from torch.utils.data import DataLoader
+import wandb
+
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -38,30 +40,66 @@ def plot_confusion_matrix(y_true, y_pred, model_name, out_dir):
     plt.close()
 
 def evaluate_accuracy(model, tokenizer, test_dataset, device, model_name, out_dir):
+    # Check if tokenizer has pad_token, if not set it
+    if tokenizer.pad_token is None:
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        else:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            model.resize_token_embeddings(len(tokenizer))
+    
     def preprocess_function(examples):
         return tokenizer(examples["input_text"], truncation=True, padding="max_length", max_length=128)
+    
     test_tokenized = test_dataset.map(preprocess_function, batched=True)
     if "input_text" in test_tokenized.column_names:
         test_tokenized = test_tokenized.remove_columns(["input_text"])
     test_tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
-    test_dataloader = DataLoader(test_tokenized, batch_size=16)
+    
+    # Use smaller batch size for models that have trouble with batching
+    batch_size = 1 if model_name in ['phi2', 'phi3'] else 16
+    test_dataloader = DataLoader(test_tokenized, batch_size=batch_size)
+    
     model.to(device)
     model.eval()
+    
     start_time = time.time()
     y_pred, y_true = [], []
+    
     with torch.no_grad():
         for batch in tqdm(test_dataloader, desc=f"Evaluating {model_name}"):
             batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**{k: v for k, v in batch.items() if k != "label"})
-            predictions = outputs.logits.argmax(dim=-1)
-            y_pred.extend(predictions.cpu().numpy())
-            y_true.extend(batch["label"].cpu().numpy())
+            
+            try:
+                outputs = model(**{k: v for k, v in batch.items() if k != "label"})
+                predictions = outputs.logits.argmax(dim=-1)
+                y_pred.extend(predictions.cpu().numpy())
+                y_true.extend(batch["label"].cpu().numpy())
+            except Exception as e:
+                print(f"Error processing batch for {model_name}: {e}")
+                # Skip this batch and continue
+                continue
+    
+    if len(y_pred) == 0:
+        print(f"Warning: No predictions were made for {model_name}")
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "confusion_matrix": [[0, 0], [0, 0]],
+            "total_inference_time_s": 0.0,
+            "avg_inference_time_ms": 0.0
+        }
+    
     accuracy = accuracy_score(y_true, y_pred)
     precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="weighted")
     cm = confusion_matrix(y_true, y_pred)
     total_time = time.time() - start_time
     avg_time_per_sample = total_time / len(y_true) * 1000  # ms
+    
     plot_confusion_matrix(y_true, y_pred, model_name, out_dir)
+    
     return {
         "accuracy": accuracy * 100,
         "precision": precision * 100,
@@ -75,9 +113,17 @@ def evaluate_accuracy(model, tokenizer, test_dataset, device, model_name, out_di
 def measure_latency(model, tokenizer, device, num_runs=50, batch_sizes=[1, 8]):
     sample_text = "Traveler from Canada with valid passport seeking entry for tourism for 2 weeks"
     latency_results = {}
+
+    # If the tokenizer has no pad_token, skip batch_size >1
+    if tokenizer.pad_token is None and tokenizer.eos_token is None:
+        print("Warning: Tokenizer has no pad token or eos token. Only measuring batch_size=1 latency.")
+        batch_sizes = [1]
+
     encoded = tokenizer(sample_text, return_tensors="pt").to(device)
+
     for _ in range(10):
         _ = model(**encoded)
+
     for batch_size in batch_sizes:
         batch_encoded = {k: v.repeat(batch_size, 1) for k, v in encoded.items()} if batch_size > 1 else encoded
         latencies = []
@@ -99,24 +145,34 @@ def measure_latency(model, tokenizer, device, num_runs=50, batch_sizes=[1, 8]):
         }
     return latency_results
 
+
 def measure_model_size(model_path):
+    from transformers import AutoConfig
+
     total_size = 0
     for path in Path(model_path).glob('**/*'):
         if path.is_file():
             total_size += path.stat().st_size
+
     file_sizes = {}
     for path in Path(model_path).glob('*'):
         if path.is_file():
             file_sizes[path.name] = path.stat().st_size / (1024 * 1024)  # MB
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+
+    # Load config and create model for counting parameters
+    config = AutoConfig.from_pretrained(model_path)
+    model = AutoModelForSequenceClassification.from_config(config)
+
     param_count = sum(p.numel() for p in model.parameters())
     trainable_param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
     return {
         "disk_size_mb": total_size / (1024 * 1024),
         "file_sizes_mb": file_sizes,
         "parameters": param_count,
         "trainable_parameters": trainable_param_count
     }
+
 
 def measure_memory_usage(model, tokenizer, device, batch_size=1):
     sample_text = "Traveler from Canada with valid passport seeking entry for tourism for 2 weeks"
@@ -196,8 +252,13 @@ def evaluate_model(model_name, model_path, test_df, test_dataset, results_dir):
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {device}")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if 'phi' in model_name.lower():
+            model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=3, ignore_mismatched_sizes=True)
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(model_path)
         tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
         model.to(device)
         print("Measuring model size...")
         size_metrics = measure_model_size(model_path)
@@ -232,6 +293,9 @@ def evaluate_model(model_name, model_path, test_df, test_dataset, results_dir):
         os.makedirs(results_dir, exist_ok=True)
         with open(os.path.join(results_dir, f"{model_name}_results.json"), "w") as f:
             json.dump(results, f, default=lambda obj: obj.tolist() if isinstance(obj, np.ndarray) else float(obj) if isinstance(obj, (np.float32, np.float64)) else int(obj) if isinstance(obj, np.integer) else obj, indent=2)
+        model.cpu()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()    
         return results
     except Exception as e:
         print(f"Error evaluating {model_name}: {e}")
@@ -242,7 +306,7 @@ def evaluate_model(model_name, model_path, test_df, test_dataset, results_dir):
 def main():
     set_seed(42)
     test_data_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
-    results_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/evaluation_results"
+    results_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/results"
     os.makedirs(results_dir, exist_ok=True)
     test_df, test_dataset = load_test_data(test_data_path)
     models = [
@@ -250,8 +314,19 @@ def main():
     {"name": "mobilebert", "path": "/disk/diamond-scratch/cvaro009/data/mobilebert"},
     {"name": "distilbert", "path": "/disk/diamond-scratch/cvaro009/data/distilbert"},
     {"name": "tinyllama", "path": "/disk/diamond-scratch/cvaro009/data/tinyllama"},
-    {"name": "mobilellama", "path": "/disk/diamond-scratch/cvaro009/data/mobilellama_risk_assessment"}
+    {"name": "mobilellama", "path": "/disk/diamond-scratch/cvaro009/data/mobilellama"},
+    {"name": "phi3", "path": "/disk/diamond-scratch/cvaro009/data/phi3_risk_classification_qlora"},
 ]
+    # Set up WandB
+    wandb.init(
+        project="risk-model-evaluation",
+        name="baseline_model_comparison",
+        config={
+            "test_data": test_data_path,
+            "num_models": len(models)
+        }
+    )
+
     all_results = {}
     for model_info in models:
         model_name = model_info["name"]
@@ -261,6 +336,16 @@ def main():
             continue
         result = evaluate_model(model_name, model_path, test_df, test_dataset, results_dir)
         if result and "error" not in result:
+            wandb.log({
+                  f"{model_name}/accuracy": result["accuracy"]["accuracy"],
+                  f"{model_name}/f1": result["accuracy"]["f1"],
+                  f"{model_name}/precision": result["accuracy"]["precision"],
+                  f"{model_name}/recall": result["accuracy"]["recall"],
+                  f"{model_name}/avg_inference_time_ms": result["accuracy"]["avg_inference_time_ms"],
+                  f"{model_name}/model_size_mb": result["size"]["disk_size_mb"],
+                  f"{model_name}/peak_memory_mb": result["memory"]["peak_memory_mb"],
+                  f"{model_name}/robustness_10pct_typos": result["robustness"]["typos"]["level_0.1"]["robustness_score"]
+            })
             all_results[model_name] = result
     with open(os.path.join(results_dir, "all_models_results.json"), "w") as f:
         json.dump(all_results, f, default=lambda obj: obj.tolist() if isinstance(obj, np.ndarray) else float(obj) if isinstance(obj, (np.float32, np.float64)) else int(obj) if isinstance(obj, np.integer) else obj, indent=2)
@@ -276,7 +361,9 @@ def main():
             "Robustness Score": f"{result['robustness']['typos']['level_0.1']['robustness_score']:.2f}"
         })
     summary_df = pd.DataFrame(summary)
-    summary_df.to_csv(os.path.join(results_dir, "model_comparison_summary.csv"), index=False)
+    wandb.log({"model_comparison_summary": wandb.Table(dataframe=summary_df)})
+    print("\nSummary of Model Performance:")
+    summary_df.to_csv(os.path.join(results_dir, "baseline_model_comparison_summary.csv"), index=False)
     print("\nModel Performance Summary:")
     print(summary_df.to_string(index=False))
     print(f"\nResults saved to {results_dir}")

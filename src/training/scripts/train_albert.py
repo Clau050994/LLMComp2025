@@ -20,6 +20,19 @@ from transformers import (
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import logging
+import wandb
+# Initialize Weights & Biases
+wandb.init(
+    project="albert-risk-assessment",
+    name="albert-run-maxlen512",
+    config={
+        "learning_rate": 3e-5,
+        "epochs": 10,
+        "batch_size": 16,
+        "max_seq_length": 512,
+        "model": "albert-base-v2"
+    }
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -67,7 +80,7 @@ def main():
             examples["input_text"],
             padding="max_length",
             truncation=True,
-            max_length=128
+            max_length=512,
         )
     
     logger.info("Tokenizing datasets...")
@@ -103,7 +116,7 @@ def main():
         metric_for_best_model="f1",
         warmup_ratio=0.1,
         logging_steps=100,
-        report_to="none",
+        report_to="wandb",
         max_grad_norm=1.0
     )
     

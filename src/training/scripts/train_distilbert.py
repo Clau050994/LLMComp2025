@@ -20,6 +20,17 @@ from transformers import (
 )
 from sklearn.metrics import precision_recall_fscore_support
 import random
+import wandb
+wandb.init(
+    project="distilbert-training",
+    name="distilbert-run-maxlen512",
+    config={
+        "learning_rate": 2e-5,
+        "epochs": 10,
+        "batch_size": 16,
+        "max_seq_length": 512,
+        "model": "distilbert-base-uncased"
+    })
 
 # ===== Reproducibility =====
 random.seed(42)
@@ -44,7 +55,7 @@ model = DistilBertForSequenceClassification.from_pretrained(model_name, num_labe
 
 # ===== Load Dataset =====
 print("Loading unified datasets...")
-unified_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/improved_data"
+unified_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified"
 train_df = pd.read_csv(os.path.join(unified_dir, "unified_train.csv"))
 val_df = pd.read_csv(os.path.join(unified_dir, "unified_val.csv"))
 test_df = pd.read_csv(os.path.join(unified_dir, "unified_test.csv"))
@@ -63,7 +74,7 @@ test_dataset = Dataset.from_pandas(test_df)
 
 # ===== Tokenization =====
 def tokenize(batch):
-    return tokenizer(batch["input_text"], truncation=True, padding="max_length", max_length=128)
+    return tokenizer(batch["input_text"], truncation=True, padding="max_length", max_length=512)
 
 print("Tokenizing datasets...")
 train_dataset = train_dataset.map(tokenize, batched=True)
@@ -124,10 +135,10 @@ training_args = TrainingArguments(
     dataloader_num_workers=1,
     load_best_model_at_end=True,
     metric_for_best_model="f1",
-    report_to="none",
     warmup_ratio=0.1,
     gradient_accumulation_steps=2,
     fp16=torch.cuda.is_available(),
+    report_to="wandb",  # Enable Weights & Biases logging
 )
 
 # ===== Trainer =====
