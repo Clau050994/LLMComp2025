@@ -13,7 +13,7 @@ import torch
 from torch.serialization import add_safe_globals
 import numpy as np
 import random
-
+import wandb
 add_safe_globals([
     np.ndarray,
     np._core.multiarray._reconstruct,
@@ -38,6 +38,18 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import logging
 import glob
 
+# === Weights & Biases Initialization ===
+wandb.init(
+    project="tinyllama-risk-assessment",
+    name="tinyllama-training-eval",
+    config={
+        "learning_rate": 2e-5,
+        "epochs": 8,
+        "batch_size": 2,
+        "max_seq_length": 1024,
+        "model": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    }
+)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -126,7 +138,7 @@ def main():
         return tokenizer(
             examples["input_text"],
             truncation=True,
-            max_length=128,
+            max_length=1024,
             padding=False,  # We'll use a data collator for dynamic padding
         )
 
@@ -193,7 +205,7 @@ def main():
         metric_for_best_model="f1",
         warmup_ratio=0.1,
         logging_steps=50,
-        report_to="none",
+        report_to="wandb",
         fp16=False,
         bf16=False,
         max_grad_norm=1.0,

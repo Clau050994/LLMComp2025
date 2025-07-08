@@ -9,6 +9,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Adjust as needed
 
 import pandas as pd
+import wandb
 import torch
 import numpy as np
 from datasets import Dataset
@@ -24,6 +25,19 @@ from transformers import (
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import logging
 from pathlib import Path
+
+# Initialize Weights & Biases
+wandb.init(
+    project="mobilellama-risk-assessment",
+    name="mobilellama-training-eval",
+    config={
+        "learning_rate": 2e-5,
+        "epochs": 10,
+        "batch_size": 16,
+        "max_seq_length": 1024,
+        "model": "JackFram/llama-68m"
+    }
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,7 +61,7 @@ def compute_metrics(pred):
 
 def main():
     # Define paths
-    model_output_dir = "/disk/diamond-scratch/cvaro009/data/mobilellama_risk_assessment"
+    model_output_dir = "/disk/diamond-scratch/cvaro009/data/mobilellama"
     
     # FIXED PATHS - using the correct unified directory
     train_path = "Desktop/LLMComp2025/data/processed/unified/unified_train.csv"
@@ -102,8 +116,8 @@ def main():
             return tokenizer(
                 examples["input_text"],
                 truncation=True,
-                max_length=128,  # Short enough for MobileLLaMA
-                padding=False,  # We'll use dynamic padding with DataCollator
+                max_length=1024,  
+                padding=False,  
             )
         
         # Tokenize datasets
@@ -145,7 +159,7 @@ def main():
             eval_strategy="epoch",
             save_strategy="epoch",
             learning_rate=2e-5,
-            per_device_train_batch_size=16,  # MobileLLaMA is smaller, can use larger batch size
+            per_device_train_batch_size=16,  
             per_device_eval_batch_size=32,
             gradient_accumulation_steps=2,
             num_train_epochs=10,  
@@ -154,8 +168,8 @@ def main():
             metric_for_best_model="f1",
             warmup_ratio=0.1,
             logging_steps=50,
-            report_to="none",
-            fp16=False,  # Disable mixed precision training to avoid gradient issues
+            report_to="wandb",
+            fp16=False, 
             max_grad_norm=1.0,
         )
         

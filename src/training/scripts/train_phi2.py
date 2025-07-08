@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Training script for Phi-3 Mini (microsoft/phi-3-mini-4k-instruct) on traveler risk classification.
+Training script for Phi-2 (microsoft/phi-2) on traveler risk classification.
 LoRA + 4-bit quantization (QLoRA-style).
 """
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import pandas as pd
 import torch
@@ -52,7 +52,7 @@ def compute_metrics(pred):
 
 def main():
     # Paths
-    model_output_dir = "/disk/diamond-scratch/cvaro009/data/phi3_risk_classification_qlora"
+    model_output_dir = "/disk/diamond-scratch/cvaro009/data/phi2_risk_classification_qlora"
     train_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_train.csv"
     val_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_val.csv"
     test_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
@@ -79,7 +79,7 @@ def main():
     val_dataset = Dataset.from_pandas(val_df)
     test_dataset = Dataset.from_pandas(test_df)
 
-    model_id = "microsoft/phi-3-mini-4k-instruct"
+    model_id = "microsoft/phi-2"
     logger.info(f"Preparing to train {model_id} with LoRA + 4-bit quantization")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -91,7 +91,7 @@ def main():
         return tokenizer(
             examples["input_text"],
             truncation=True,
-            max_length=1024,  # Reduce context length for speed
+            max_length=1024,  # Shorter context for speed
         )
 
     logger.info("Tokenizing datasets...")
@@ -129,18 +129,11 @@ def main():
 
     logger.info("Applying LoRA adapters...")
     lora_config = LoraConfig(
-        r=8,
-        lora_alpha=16,
+        r=8,                 # Rank
+        lora_alpha=16,       # Alpha
         lora_dropout=0.05,
         bias="none",
-        task_type=TaskType.SEQ_CLS,
-        target_modules=["q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj"]  # Phi-3 specific modules
+        task_type=TaskType.SEQ_CLS
     )
     model = get_peft_model(model, lora_config)
 
@@ -157,17 +150,17 @@ def main():
         eval_strategy="epoch",
         save_strategy="epoch",
         learning_rate=2e-4,
-        per_device_train_batch_size=4,    # Phi-3 is larger; smaller batch
-        per_device_eval_batch_size=8,
-        gradient_accumulation_steps=4,    # Helps reduce memory
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=16,
+        gradient_accumulation_steps=2,
         num_train_epochs=5,
         weight_decay=0.01,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         logging_steps=50,
         report_to="none",
-        fp16=False,
-        bf16=True,   # Use bfloat16 on A100 or Ampere GPUs
+        fp16=False,  # Not needed; bfloat16 in 4-bit quantization
+        bf16=True,   # Enable bfloat16 if available
         max_grad_norm=1.0
     )
 
@@ -187,7 +180,7 @@ def main():
     logger.info("Evaluating on test set...")
     test_results = trainer.evaluate(test_tokenized)
 
-    logger.info("\nPhi-3 QLoRA Classification Results:")
+    logger.info("\nPhi-2 QLoRA Classification Results:")
     logger.info(f"Best validation metric: {trainer.state.best_metric:.4f}")
     logger.info(f"Test accuracy: {test_results['eval_accuracy']:.4f}")
     logger.info(f"Test F1: {test_results['eval_f1']:.4f}")

@@ -2,7 +2,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 #MODEL_NAME =  Change as needed
-MODEL_DIR = f"/disk/diamond-scratch/cvaro009/data/old_models/distilbert"
+MODEL_DIR = f"/disk/diamond-scratch/cvaro009/data/model/distilbert"
 
 print("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
