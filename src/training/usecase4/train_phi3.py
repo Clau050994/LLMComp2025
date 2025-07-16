@@ -1,201 +1,191 @@
 #!/usr/bin/env python3
 """
-Training script for Phi-3 Mini (microsoft/phi-3-mini-4k-instruct) on traveler risk classification.
-LoRA + 4-bit quantization (QLoRA-style).
+QLoRA + 4-bit Phi-3-mini on BillSum summarization task using TRL's SFTTrainer.
 """
 
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  
-
-import pandas as pd
 import torch
+import wandb
 import numpy as np
-from datasets import Dataset
+from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
-    AutoModelForSequenceClassification,
-    TrainingArguments,
-    Trainer,
+    AutoModelForCausalLM,
     EarlyStoppingCallback,
-    DataCollatorWithPadding,
-    AutoConfig,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
 )
-from peft import (
-    prepare_model_for_kbit_training,
-    LoraConfig,
-    get_peft_model,
-    TaskType
+from trl import SFTTrainer, SFTConfig
+from evaluate import load
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+# 🔧 Environment setup
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+os.environ["FLASH_ATTENTION_2_ENABLED"] = "0"
+
+# 🌟 Init W&B
+wandb.init(
+    project="phi3_billsum",
+    name="phi3-billsum-qlora-run",
+    config={
+        "epochs": 5,
+        "lr": 2e-5,
+        "batch_size": 4,
+        "model": "microsoft/phi-3-mini-4k-instruct",
+        "dataset": "BillSum",
+        "quantization": "QLoRA 4-bit"
+    }
 )
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+print("🚀 Starting Phi-3 QLoRA training...")
 
-# Set seeds
-np.random.seed(42)
-torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
+# 📂 Load dataset
+train_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/billsum/us_train_data_final_OFFICIAL.jsonl"
+val_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/billsum/us_test_data_final_OFFICIAL.jsonl"
+train_ds = load_dataset("json", data_files=train_path)["train"]
+val_ds = load_dataset("json", data_files=val_path)["train"]
 
-def compute_metrics(pred):
-    labels = pred.label_ids
-    preds = pred.predictions.argmax(-1)
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        labels, preds, average="weighted", zero_division=0
-    )
-    acc = accuracy_score(labels, preds)
-    return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
+# 🤖 Load tokenizer and quantized model
+model_name = "microsoft/phi-3-mini-4k-instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
-def main():
-    # Paths
-    model_output_dir = "/disk/diamond-scratch/cvaro009/data/phi3_risk_classification_qlora"
-    train_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_train.csv"
-    val_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_val.csv"
-    test_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+)
 
-    os.makedirs(model_output_dir, exist_ok=True)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    quantization_config=bnb_config,
+    trust_remote_code=True
+)
 
-    logger.info("Loading datasets...")
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
-    test_df = pd.read_csv(test_path)
+# ✅ Prepare model for QLoRA fine-tuning
+model = prepare_model_for_kbit_training(model)
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+model = get_peft_model(model, lora_config)
 
-    logger.info(f"Training examples: {len(train_df)}")
-    logger.info(f"Validation examples: {len(val_df)}")
-    logger.info(f"Test examples: {len(test_df)}")
-    logger.info("Label distribution in training set:")
-    logger.info(train_df['label'].value_counts().to_dict())
+model.gradient_checkpointing_enable()
+model.config.use_cache = False
 
-    assert set(train_df["label"].unique()) <= {0, 1, 2}, "Unexpected labels!"
+# 🔧 Preprocessing
+max_total_tokens = 1536
+max_input_tokens = 1024
+max_output_tokens = 512
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+def preprocess(example):
+    instruction = f"""### Instruction:
+Summarize the following legislative document in plain English.
 
-    train_dataset = Dataset.from_pandas(train_df)
-    val_dataset = Dataset.from_pandas(val_df)
-    test_dataset = Dataset.from_pandas(test_df)
+### Input:
+{example['text']}
 
-    model_id = "microsoft/phi-3-mini-4k-instruct"
-    logger.info(f"Preparing to train {model_id} with LoRA + 4-bit quantization")
+### Response:"""
+    summary = example["summary"]
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+    input_enc = tokenizer(instruction, truncation=True, max_length=max_input_tokens, padding=False)
+    output_enc = tokenizer(summary, truncation=True, max_length=max_output_tokens, padding=False)
 
-    def tokenize_function(examples):
-        return tokenizer(
-            examples["input_text"],
-            truncation=True,
-            max_length=1024,  # Reduce context length for speed
-        )
+    input_ids = input_enc["input_ids"] + output_enc["input_ids"]
+    attention_mask = input_enc["attention_mask"] + output_enc["attention_mask"]
+    labels = [-100] * len(input_enc["input_ids"]) + output_enc["input_ids"]
 
-    logger.info("Tokenizing datasets...")
-    train_tokenized = train_dataset.map(tokenize_function, batched=True)
-    val_tokenized = val_dataset.map(tokenize_function, batched=True)
-    test_tokenized = test_dataset.map(tokenize_function, batched=True)
+    return {
+        "input_ids": input_ids[:max_total_tokens],
+        "attention_mask": attention_mask[:max_total_tokens],
+        "labels": labels[:max_total_tokens]
+    }
 
-    train_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-    val_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-    test_tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
+train_ds = train_ds.map(preprocess, remove_columns=train_ds.column_names)
+val_ds = val_ds.map(preprocess, remove_columns=val_ds.column_names)
 
-    logger.info("Loading model with 4-bit quantization...")
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
+# 🔢 Evaluation
+rouge = load("rouge")
+bertscore = load("bertscore")
 
-    config = AutoConfig.from_pretrained(
-        model_id,
-        num_labels=3,
-        pad_token_id=tokenizer.pad_token_id
-    )
+def compute_metrics(eval_preds):
+    preds, labels = eval_preds
+    if isinstance(preds, tuple):
+        preds = preds[0]
+    if preds.ndim == 3:
+        preds = preds.argmax(axis=-1)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_id,
-        config=config,
-        quantization_config=quantization_config,
-        device_map="auto"
-    )
+    labels = [[(token if token != -100 else tokenizer.pad_token_id) for token in label] for label in labels]
+    decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    model = prepare_model_for_kbit_training(model)
-    model.gradient_checkpointing_enable()
+    decoded_preds = ["\n".join(p.strip().split(". ")) for p in decoded_preds]
+    decoded_labels = ["\n".join(l.strip().split(". ")) for l in decoded_labels]
 
-    logger.info("Applying LoRA adapters...")
-    lora_config = LoraConfig(
-        r=8,
-        lora_alpha=16,
-        lora_dropout=0.05,
-        bias="none",
-        task_type=TaskType.SEQ_CLS,
-        target_modules=["q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj"]  # Phi-3 specific modules
-    )
-    model = get_peft_model(model, lora_config)
+    rouge_result = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+    bert_result = bertscore.compute(predictions=decoded_preds, references=decoded_labels, lang="en")
 
-    logger.info("LoRA applied. Model ready.")
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Total params: {total_params:,}")
-    logger.info(f"Trainable params: {trainable_params:,}")
+    return {
+        "rouge1": round(rouge_result["rouge1"].mid.fmeasure * 100, 2),
+        "rouge2": round(rouge_result["rouge2"].mid.fmeasure * 100, 2),
+        "rougeL": round(rouge_result["rougeL"].mid.fmeasure * 100, 2),
+        "bertscore_f1": round(np.mean(bert_result["f1"]) * 100, 2),
+    }
 
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+# 📁 Output directories
+output_dir = "/disk/diamond-scratch/cvaro009/data/usecase4/phi3_billsum"
+final_model_dir = "/disk/diamond-scratch/cvaro009/data/usecase4/phi3_final"
+os.makedirs(output_dir, exist_ok=True)
+os.makedirs(final_model_dir, exist_ok=True)
 
-    training_args = TrainingArguments(
-        output_dir=model_output_dir,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        learning_rate=2e-4,
-        per_device_train_batch_size=4,    # Phi-3 is larger; smaller batch
-        per_device_eval_batch_size=8,
-        gradient_accumulation_steps=4,    # Helps reduce memory
-        num_train_epochs=5,
-        weight_decay=0.01,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1",
-        logging_steps=50,
-        report_to="none",
-        fp16=False,
-        bf16=True,   # Use bfloat16 on A100 or Ampere GPUs
-        max_grad_norm=1.0
-    )
+# ⚙️ SFT Config
+sft_config = SFTConfig(
+    output_dir=output_dir,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    num_train_epochs=5,
+    learning_rate=2e-5,
+    max_seq_length=1536,
+    logging_steps=50,
+    save_strategy="epoch",
+    save_total_limit=2,
+    eval_strategy="epoch",
+    eval_accumulation_steps=1,
+    fp16=torch.cuda.is_available(),
+    fp16_full_eval=False,
+    report_to="wandb",
+    dataset_text_field="input_ids",
+    load_best_model_at_end=True,
+    metric_for_best_model="rougeL",
+    greater_is_better=True,
+    save_safetensors=True,
+    dataloader_pin_memory=False,
+    remove_unused_columns=False
+)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_tokenized,
-        eval_dataset=val_tokenized,
-        compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
-        data_collator=data_collator,
-    )
+# 🏋️ Train
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    args=sft_config,
+    compute_metrics=compute_metrics,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
+)
 
-    logger.info("Starting training...")
-    trainer.train()
+trainer.train()
 
-    logger.info("Evaluating on test set...")
-    test_results = trainer.evaluate(test_tokenized)
+# 📂 Save model
+trainer.save_model(final_model_dir)
+tokenizer.save_pretrained(final_model_dir)
 
-    logger.info("\nPhi-3 QLoRA Classification Results:")
-    logger.info(f"Best validation metric: {trainer.state.best_metric:.4f}")
-    logger.info(f"Test accuracy: {test_results['eval_accuracy']:.4f}")
-    logger.info(f"Test F1: {test_results['eval_f1']:.4f}")
-
-    trainer.save_model(model_output_dir)
-    tokenizer.save_pretrained(model_output_dir)
-    logger.info(f"Model and tokenizer saved to {model_output_dir}")
-
-if __name__ == "__main__":
-    main()
-    logger.info("Training script completed successfully.")
+wandb.finish()
+print("✅ Phi-3 QLoRA 4-bit training complete. Model saved.")
