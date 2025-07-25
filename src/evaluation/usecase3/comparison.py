@@ -305,17 +305,17 @@ def evaluate_model(model_name, model_path, test_df, test_dataset, results_dir):
 
 def main():
     set_seed(42)
-    test_data_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/unified/unified_test.csv"
-    results_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/results"
+    test_data_path = "/aul/homes/cvaro009/Desktop/LLMComp2025/data/processed/usecase3/unified/unified_test.csv"
+    results_dir = "/aul/homes/cvaro009/Desktop/LLMComp2025/results_baseline_comparison"
     os.makedirs(results_dir, exist_ok=True)
     test_df, test_dataset = load_test_data(test_data_path)
     models = [
-    {"name": "albert", "path": "/disk/diamond-scratch/cvaro009/data/albert"},
-    {"name": "mobilebert", "path": "/disk/diamond-scratch/cvaro009/data/mobilebert"},
-    {"name": "distilbert", "path": "/disk/diamond-scratch/cvaro009/data/distilbert"},
-    {"name": "tinyllama", "path": "/disk/diamond-scratch/cvaro009/data/tinyllama"},
-    {"name": "mobilellama", "path": "/disk/diamond-scratch/cvaro009/data/mobilellama"},
-    {"name": "phi3", "path": "/disk/diamond-scratch/cvaro009/data/phi3_risk_classification_qlora"},
+    {"name": "albert", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/albert"},
+    {"name": "mobilebert", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/mobilebert"},
+    {"name": "distilbert", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/distilbert"},
+    {"name": "tinyllama", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/tinyllama"},
+    {"name": "mobilellama", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/mobilellama"},
+    {"name": "phi3", "path": "/disk/diamond-scratch/cvaro009/data/usecase3/phi3_risk_classification_qlora"},
 ]
     # Set up WandB
     wandb.init(
